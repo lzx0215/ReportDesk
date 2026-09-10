@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copy to report-visibility.xml next to ReportDesk.exe, then restart the app. -->
+<!-- selected: show only listed report IDs; an empty list shows no reports. -->
+<!-- Replace the example ID below with an actual catalog ID and remove the comment. -->
+<ReportVisibility mode="selected">
+  <!-- <Report id="COPY_ACTUAL_REPORT_ID_HERE" name="Optional note for the administrator" /> -->
+</ReportVisibility>

@@ -1,0 +1,15 @@
+**/bin/
+**/obj/
+artifacts/
+.vs/
+*.user
+.env
+.env.*
+*.log
+*.pfx
+*.p12
+*.key
+catalog.json
+catalog.json.bak
+report-visibility.xml
+tnsnames.ora

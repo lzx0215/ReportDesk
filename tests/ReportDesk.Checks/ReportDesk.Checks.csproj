@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../../src/ReportDesk.Core/ReportDesk.Core.csproj" /><Reference Include="System.IO.Compression" /><Reference Include="System.IO.Compression.FileSystem" /></ItemGroup>
+</Project>

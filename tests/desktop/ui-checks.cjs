@@ -1,0 +1,45 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const root = path.resolve(__dirname,'../..');
+const { _electron: electron } = require(path.join(root,'src/ReportDesk.Desktop/node_modules/playwright'));
+const dir = path.join(root,'artifacts/verification/desktop','ui-'+Date.now());fs.mkdirSync(dir,{recursive:true});
+const data=path.join(dir,'data'),config=path.join(dir,'config');fs.mkdirSync(data);fs.mkdirSync(config);
+let desktop;
+(async()=>{
+ const env={...process.env,REPORTDESK_TEST:'1',REPORTDESK_TEST_DATA:data,REPORTDESK_TEST_CONFIG:config};delete env.ELECTRON_RUN_AS_NODE;
+ desktop=await electron.launch({args:[path.join(root,'src/ReportDesk.Desktop')],env});
+ const page=await desktop.firstWindow();const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.waitForFunction(()=>document.querySelector('#operation-status').textContent==='准备就绪。');
+ assert.equal(await page.evaluate(()=>typeof window.require),'undefined');
+ assert.equal(await page.locator('.report-item').count(),0);
+ await page.click('#demo');await page.waitForFunction(()=>document.querySelector('#query').disabled===false);
+ assert.equal(await page.locator('[data-parameter]').count(),3);
+ await page.click('#query');await page.waitForFunction(()=>document.querySelector('#execution').classList.contains('done')&&!document.querySelector('#query').disabled);
+ assert.equal(await page.locator('tbody tr').count(),14);
+ await page.fill('#result-filter','演示科室 B');await page.locator('#filter-form button').click();await page.waitForFunction(()=>!document.querySelector('#query').disabled);assert.equal(await page.locator('tbody tr').count(),7);
+ await page.locator('th button').last().click();await page.waitForFunction(()=>!document.querySelector('#query').disabled);
+ await page.locator('tbody input[type=checkbox]').first().check();await page.click('#copy');await page.waitForFunction(()=>!document.querySelector('#query').disabled);
+ const exported=path.join(dir,'ui-export.xlsx');
+ await desktop.evaluate(({dialog},file)=>{dialog.showSaveDialog=async()=>({canceled:false,filePath:file});},exported);
+ await page.click('#export');await page.waitForFunction(()=>!document.querySelector('#query').disabled);assert.ok(fs.existsSync(exported));
+ await page.click('#collapse');assert.equal(await page.locator('#conditions').isVisible(),false);await page.click('#toggle-conditions');
+ await page.click('#metadata-open');await page.fill('#meta-notes','<img src=x onerror=alert(1)>');await page.fill('#meta-aliases','offline-ui');await page.locator('#metadata-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#metadata').open&&!document.querySelector('#query').disabled);
+ await page.click('#settings-open');await page.waitForFunction(()=>document.querySelector('#connection').open&&!document.querySelector('#conn-name').disabled);
+ await page.fill('#conn-name','UI offline');await page.fill('#conn-host','127.0.0.1');await page.fill('#conn-service','test');await page.fill('#conn-user','readonly');await page.uncheck('#conn-keep');await page.fill('#conn-password','UI_PRIVATE_PASSWORD');await page.check('#conn-remember');
+ await page.locator('#connection-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#connection').open&&!document.querySelector('#query').disabled);
+ assert.equal(await page.locator('tbody tr').count(),0);assert.ok(!fs.readFileSync(path.join(data,'catalog.json'),'utf8').includes('UI_PRIVATE_PASSWORD'));
+ await page.click('#query');await page.waitForFunction(()=>!document.querySelector('#query').disabled);await page.mouse.move(0,0);
+ // Import an unsupported synthetic definition through the real native-dialog route.
+ const xml=path.join(dir,'unsupported.xml');fs.writeFileSync(xml,'<ReportQueryInfo><List><List><Name>x</Name><Text>自定义参数</Text><ControlType Type="FS.Core.UI.Report.Common.ControlType.CustomControl,FS.Core.UI" /></List></List><QueryDataSource><QueryDataSource><Name>main</Name><Sql>select &apos;&amp;x&apos; from dual</Sql><SqlType>MainReportUsing</SqlType></QueryDataSource></QueryDataSource></ReportQueryInfo>');
+ await desktop.evaluate(({dialog},file)=>{dialog.showOpenDialog=async()=>({canceled:false,filePaths:[file]});},xml);
+ await page.click('#import-file');await page.waitForFunction(()=>document.querySelectorAll('.report-item').length===2&&!document.querySelector('#import-file').disabled);
+ await page.locator('.report-item').filter({hasText:'unsupported'}).click();await page.waitForFunction(()=>!document.querySelector('#import-file').disabled);
+ assert.equal(await page.locator('#query').isDisabled(),true);assert.equal(await page.locator('tbody tr').count(),0);assert.ok((await page.locator('#issues').textContent()).includes('待适配'));
+ await page.locator('.report-item').filter({hasText:'体验查询流程'}).click();await page.waitForFunction(()=>!document.querySelector('#query').disabled);await page.click('#query');await page.waitForFunction(()=>!document.querySelector('#query').disabled);
+ assert.equal(await page.locator('img').count(),0);
+ await page.screenshot({path:path.join(dir,'desktop.png'),fullPage:true});
+ for(const width of [1440,1046]) {await desktop.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows()[0].setSize(width,800),width);await page.waitForTimeout(100);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);}
+ assert.deepEqual(errors,[]);fs.writeFileSync(path.join(dir,'PASS.txt'),'PASS: actual Electron + .NET backend; dynamic demo parameters; query/filter/sort/copy/export; collapse; metadata XSS-as-text; settings/DPAPI; no renderer errors.\n');console.log('PASS desktop UI: '+dir);
+ await desktop.close();desktop=null;
+})().catch(async e=>{console.error(e);if(desktop){try {const p=await desktop.firstWindow();await p.screenshot({path:path.join(dir,'failure.png')});console.error(await p.locator('#operation-status').textContent());await desktop.close();}catch{}}process.exitCode=1;});

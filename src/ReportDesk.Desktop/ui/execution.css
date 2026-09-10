@@ -1,0 +1,64 @@
+/* Launcher-style execution strip: status above a full-width, rounded track. */
+.execution {
+  margin-top: 16px;
+  padding: 17px 0 2px;
+}
+.execution-head {
+  min-height: 38px;
+  gap: 14px;
+}
+.execution-heading {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-width: 0;
+}
+.execution-icon {
+  width: 34px;
+  height: 38px;
+  flex-shrink: 0;
+  color: #f5f5f0;
+}
+.execution-head #operation-status {
+  color: #f5f5f0;
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.6;
+  letter-spacing: .3px;
+}
+#cancel {
+  flex-shrink: 0;
+  color: #eeeee9;
+  border-color: #e1e3e04d;
+  background: #20282655;
+}
+#cancel:hover { background: #ffffff12; border-color: #eeeee9aa; }
+.execution .track {
+  height: 10px;
+  margin-top: 14px;
+  border-radius: 999px;
+  background: #a2a8b34d;
+}
+.execution .track > div {
+  background: linear-gradient(90deg, #d7d8d9, #ffffff);
+  border-radius: inherit;
+}
+.execution.running .track > div {
+  width: 24%;
+  animation: execution-flow 2.2s linear infinite;
+}
+.execution.done .track > div { background: #f2f2ee; }
+.execution.error .track > div { width: 0; }
+.execution.error #operation-status { color: #e8b5a8; }
+@keyframes execution-flow {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(417%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .execution.running .track > div {
+    animation: none;
+    width: 100%;
+    opacity: .55;
+    background: repeating-linear-gradient(110deg, #eee 0 10px, transparent 10px 20px);
+  }
+}

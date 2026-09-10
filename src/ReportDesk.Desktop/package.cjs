@@ -1,0 +1,3 @@
+const { packager } = require('@electron/packager');
+const path = require('node:path');
+(async () => { const root = path.resolve(__dirname, '../..'); const result = await packager({ dir: __dirname, name: 'ReportDesk', executableName: 'ReportDesk', platform: 'win32', arch: 'x64', electronVersion: require('./package.json').devDependencies.electron, download: { checksums: require('./node_modules/electron/checksums.json'), cacheRoot: path.join(root,'artifacts/runtime/cache') }, out: path.join(root,'artifacts/desktop'), overwrite: true, asar: true, extraResource: [path.join(root,'artifacts/host')], ignore: [/package\.cjs$/] }); console.log(result.join('\n')); })().catch(e => { console.error('打包失败：' + e.message); process.exit(1); });

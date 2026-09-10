@@ -1,0 +1,10 @@
+const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');
+const root=path.resolve(__dirname,'../..');const {_electron:electron}=require(path.join(root,'src/ReportDesk.Desktop/node_modules/playwright'));
+const directory=path.join(root,'artifacts/verification/desktop','package-'+Date.now());fs.mkdirSync(directory,{recursive:true});let desktop;
+(async()=>{const env={...process.env,LOCALAPPDATA:directory};delete env.ELECTRON_RUN_AS_NODE;delete env.REPORTDESK_TEST;
+ desktop=await electron.launch({executablePath:path.join(root,'artifacts/desktop/ReportDesk-win32-x64/ReportDesk.exe'),env});const page=await desktop.firstWindow();
+ await page.waitForFunction(()=>document.querySelector('#operation-status').textContent==='准备就绪。');
+ assert.equal(await desktop.evaluate(({app})=>app.isPackaged),true);assert.equal(await desktop.evaluate(()=>process.arch),'x64');
+ await page.click('#demo');await page.waitForFunction(()=>!document.querySelector('#query').disabled);await page.click('#query');await page.waitForFunction(()=>!document.querySelector('#query').disabled);assert.equal(await page.locator('tbody tr').count(),14);
+ await page.screenshot({path:path.join(directory,'packaged-desktop.png')});await desktop.close();desktop=null;fs.writeFileSync(path.join(directory,'PASS.txt'),'PASS: packaged Windows x64 EXE, isolated user data, Core demo query, 14 rows. No real Oracle connection.\n');console.log('PASS packaged EXE: '+directory);
+})().catch(async e=>{console.error(e);if(desktop)await desktop.close().catch(()=>{});process.exitCode=1;});

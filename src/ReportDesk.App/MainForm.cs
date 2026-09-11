@@ -138,7 +138,7 @@ internal sealed class MainForm : Form
         button.FlatAppearance.BorderColor = Color.FromArgb(209, 220, 228); button.Click += (_, _) => action(); return button;
     }
     private void Save() => store.Save(catalog);
-    private IEnumerable<ReportDefinition> VisibleReports() => catalog.Reports.Where(visibility.Includes);
+    private IEnumerable<ReportDefinition> VisibleReports() => catalog.Reports.Where(ReportClassification.IsStandalone).Where(visibility.Includes);
     private void RefreshNavigation()
     {
         var previous = navigation.SelectedItem as string; refreshing = true;
@@ -221,15 +221,21 @@ internal sealed class MainForm : Form
             else if (p.Kind == "ComboBoxType")
             {
                 var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = "Text" };
-                if (p.HasAll) combo.Items.Add(new Choice(p.AllValue, "全部"));
+                if (p.HasAll) combo.Items.Add(new Choice(p.AllValue, p.AllLabel ?? "全部"));
+                foreach (var option in p.Options ?? new List<ParameterOption>()) combo.Items.Add(new Choice(option.Value, option.Label));
                 // No automatic selection: ALL can materially broaden the query.
                 control = combo; inputs[p.Name] = () => (combo.SelectedItem as Choice)?.Value ?? throw new InvalidOperationException("请选择：" + p.Label);
-                var lookup = Button("加载选项", async () => await LookupAsync(p, combo)); lookup.Location = new Point(0, 54); lookup.Height = 27; lookup.Enabled = p.LookupSql.Length > 0 && selected.Issues.Count == 0;
+                var lookup = Button("加载选项", async () => await LookupAsync(p, combo)); lookup.Location = new Point(0, 54); lookup.Height = 27; lookup.Enabled = ParameterOptions.LookupSql(p).Length > 0 && selected.Issues.Count == 0;
                 panel.Controls.Add(lookup);
+            }
+            else if (p.Kind == "CheckBoxType")
+            {
+                var checkbox = new CheckBox { Checked = ParameterOptions.Initial(p) == "True" };
+                control = checkbox; inputs[p.Name] = () => checkbox.Checked ? "True" : "False";
             }
             else
             {
-                var text = new TextBox(); control = text; inputs[p.Name] = () => text.Text;
+                var text = new TextBox { Text = ParameterOptions.Initial(p) }; control = text; inputs[p.Name] = () => text.Text;
             }
             inputControls[p.Name] = control; control.Location = new Point(0, 24); control.Width = 264; panel.Controls.Add(control); parameters.Controls.Add(panel);
         }
@@ -249,7 +255,7 @@ internal sealed class MainForm : Form
             var p = selected!.Parameters.First(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
             var value = read();
             if (p.Implicit && string.IsNullOrWhiteSpace(value)) throw new InvalidOperationException("请明确填写上下文/明细参数：" + name);
-            data[name] = SqlTemplate.Transform(p, value);
+            data[name] = SqlTemplate.Transform(p, ParameterOptions.Validate(p, value));
         }
         return data;
     }
@@ -310,13 +316,14 @@ internal sealed class MainForm : Form
     {
         if (selected == null || !visibility.Includes(selected) || !selected.Parameters.Contains(p)) return;
         Dictionary<string, string> values;
-        try { values = ReadValues(p.LookupSql); if (!EnsureConnection()) return; } catch (Exception ex) { Error(ex); return; }
+        var sql = ParameterOptions.LookupSql(p);
+        try { values = ParameterOptions.IsDictionary(p) ? ParameterOptions.LookupValues(p) : ReadValues(sql); if (!EnsureConnection()) return; } catch (Exception ex) { Error(ex); return; }
         await Busy(async token =>
         {
             status.Text = "正在加载 " + p.Label + " 选项…";
-            var result = await Task.Run(() => OracleQueryService.Execute(catalog.Connection, password, p.LookupSql, values, token), token);
+            var result = await Task.Run(() => OracleQueryService.Execute(catalog.Connection, password, sql, values, token), token);
             if (result.Table.Columns.Count < 2) throw new InvalidOperationException("选项 SQL 需要至少两列：编码、名称。");
-            combo.Items.Clear(); if (p.HasAll) combo.Items.Add(new Choice(p.AllValue, "全部"));
+            combo.Items.Clear(); if (p.HasAll) combo.Items.Add(new Choice(p.AllValue, p.AllLabel ?? "全部"));
             foreach (DataRow row in result.Table.Rows) combo.Items.Add(new Choice(Convert.ToString(row[0], CultureInfo.InvariantCulture) ?? "", Convert.ToString(row[1], CultureInfo.InvariantCulture) + "  [" + row[0] + "]"));
             status.Text = "已加载 " + result.Table.Rows.Count + " 个选项，请选择后查询。";
         });
@@ -325,12 +332,20 @@ internal sealed class MainForm : Form
     {
         if (selected == null || !visibility.Includes(selected) || selected.Issues.Count > 0 || !(sources.SelectedItem is QueryDefinition query)) return;
         var report = selected; Dictionary<string, string> values;
+        if(query.Kind=="ConditionUsing" || report.Parameters.Any(p=>p.TreeSelect || p.LookupSourceName.Length>0) ||
+            SqlTemplate.Compile(query.Sql).RequiredNames.Any(n=>n.Contains(".")))
+        { Error(new InvalidOperationException("本报表包含新版条件处理，请使用 Electron 桌面程序查询。旧 WinForms 入口不能正确处理这些条件。")); return; }
         try { values = ReadValues(query.Sql); if (!report.IsDemo && !EnsureConnection()) return; } catch (Exception ex) { Error(ex); return; }
         ClearResults();
         await Busy(async token =>
         {
             status.Text = report.IsDemo ? "正在生成模拟数据…" : "正在查询，连接等待取决于网络及连接配置；执行中可取消…";
-            var result = await Task.Run(() => report.IsDemo ? DemoData.Execute(values, token) : OracleQueryService.Execute(catalog.Connection, password, query.Sql, values, token), token);
+            var result = await Task.Run(() =>
+            {
+                var data = report.IsDemo ? DemoData.Execute(values, token) : OracleQueryService.Execute(catalog.Connection, password, query.Sql, values, token);
+                try { HisResultRules.Complete(data, query, token); return data; }
+                catch { data.Table.Dispose(); throw; }
+            }, token);
             token.ThrowIfCancellationRequested(); currentResult = result; results.DataSource = result.Table.DefaultView;
             resultContext = report.Name + " / " + query.Name + (result.Demo ? " / 模拟数据" : " / " + report.Status) + " / 已加载结果";
             report.LastUsed = DateTime.Now; Save();

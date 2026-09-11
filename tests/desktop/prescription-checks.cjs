@@ -1,0 +1,71 @@
+// Uses the user's original XML read-only; no original HIS files go into the distributed update.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { once } = require('node:events');
+const { Bridge } = require('../../src/ReportDesk.Desktop/bridge.cjs');
+const root = path.resolve(__dirname, '../..');
+const { _electron: electron } = require(path.join(root, 'src/ReportDesk.Desktop/node_modules/playwright'));
+const sources = path.resolve(process.argv[2]);
+const baseline = path.resolve(process.argv[3]);
+const packagedExecutable = process.argv[4] ? path.resolve(process.argv[4]) : null;
+const run = path.join(root, 'artifacts/verification/desktop', 'prescription-' + Date.now());
+const data = path.join(run, 'data'), config = path.join(run, 'config'), xml = path.join(run, 'HIS', 'Config', 'Xml');
+for (const dir of [data, config, xml]) fs.mkdirSync(dir, { recursive: true });
+for (const name of ['门诊处方患者明细查询设置.xml', '门诊处方患者明细报表设置.xml', '门诊处方患者明细的明细报表设置.xml']) fs.copyFileSync(path.join(sources, name), path.join(xml, name));
+const file = path.join(xml, '门诊处方患者明细查询设置.xml');
+let bridge, desktop;
+async function stop() { const done = once(bridge.process, 'exit'); bridge.close(); await done; bridge = null; }
+(async () => {
+  // Reproduce on the previous delivered backend and retain its saved catalog.
+  bridge = new Bridge(path.join(baseline, 'resources/host/ReportDesk.Host.exe'), data, config, true, () => {}, () => {});
+  const before = await bridge.call('import', { path: file }); assert.equal(before.pending, 1);
+  const id = before.reports[0].id; const originalDefinition = await bridge.call('definition', { reportId: id });
+  await assert.rejects(bridge.call('query', { reportId: id, source: 0 }), /待适配/);
+  await bridge.call('metadata', { reportId: id, notes: 'preserve review note', category: '验收', aliases: 'prescription-fixture', verified: false });
+  await stop();
+  const oldCatalog = fs.readFileSync(path.join(data, 'catalog.json'));
+  bridge = new Bridge(path.join(root, 'artifacts/host/ReportDesk.Host.exe'), data, config, true, () => {}, () => {});
+  assert.equal((await bridge.call('bootstrap')).reports[0].issues.length > 0, true);
+  const after = await bridge.call('import', { folder: true, path: path.join(run, 'HIS') });
+  assert.equal(after.pending, 0); assert.equal(after.reports[0].id, id); assert.equal(after.reports[0].notes, 'preserve review note');
+  assert.deepEqual(await bridge.call('definition', { reportId: id }), originalDefinition);
+  const detail = await bridge.call('select', { reportId: id, source: 0 });
+  assert.deepEqual(detail.parameters.map(p => p.name), ['dtBeginTime', 'dtEndTime', 'dtYYPE']); assert.match(detail.adaptation, /主明细分别执行/);
+  const mainArgs = { reportId: id, source: 0, values: { dtBeginTime: '2026-01-01', dtEndTime: '2026-01-02', dtYYPE: 'ALL' } };
+  await assert.rejects(bridge.call('query', mainArgs), /离线验证模式禁止真实数据库连接/);
+  await assert.rejects(bridge.call('query', { ...mainArgs, values: { dtBeginTime: '2026-01-01', dtEndTime: '2026-01-02' } }), /填写或选择所有查询条件/);
+  const child = await bridge.call('select', { reportId: id, source: 1 });
+  assert.deepEqual(child.parameters.map(p => p.name), ['唯一号', '处方号']); assert.ok(child.parameters.every(p => p.implicitValue));
+  await assert.rejects(bridge.call('query', { reportId: id, source: 1, values: { '唯一号': '0000123', '处方号': 'RX001' } }), /离线验证模式禁止真实数据库连接/);
+  await assert.rejects(bridge.call('query', { reportId: id, source: 1, values: { '唯一号': '', '处方号': 'RX001' } }), /上下文编码/);
+  await stop();
+  // Real UI upgrades the existing pending catalog via the native folder import route.
+  const uiData = packagedExecutable ? path.join(run, 'packaged-user', 'ReportDesk') : data;
+  fs.mkdirSync(uiData, { recursive: true }); fs.writeFileSync(path.join(uiData, 'catalog.json'), oldCatalog);
+  const env = { ...process.env, REPORTDESK_TEST: '1', REPORTDESK_TEST_DATA: data, REPORTDESK_TEST_CONFIG: config }; delete env.ELECTRON_RUN_AS_NODE;
+  if (packagedExecutable) env.LOCALAPPDATA = path.dirname(uiData);
+  desktop = await electron.launch(packagedExecutable ? { executablePath: packagedExecutable, env } : { args: [path.join(root, 'src/ReportDesk.Desktop')], env });
+  // The isolated legacy catalog has no password. A packaged UI must stop before connecting.
+  const queryBoundary = packagedExecutable ? /请先在连接设置中填写密码/ : /离线验证模式禁止真实数据库连接/;
+  const page = await desktop.firstWindow(); page.setDefaultTimeout(20000); const errors = []; page.on('pageerror', e => errors.push(e.message));
+  await page.waitForFunction(() => document.querySelector('#operation-status').textContent === '准备就绪。');
+  assert.equal(await page.locator('#query').isDisabled(), true);
+  await desktop.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, path.join(run, 'HIS'));
+  await page.click('#import-folder'); await page.waitForFunction(() => document.querySelector('#notice').open && !document.querySelector('#import-folder').disabled);
+  assert.match(await page.locator('#notice-body').textContent(), /待适配 0 张/); await page.click('[data-close=notice]');
+  assert.equal(await page.locator('#query').isDisabled(), false); assert.equal(await page.locator('[data-parameter]').count(), 3);
+  assert.match(await page.locator('#issues').textContent(), /已适配此版本的表格查询/);
+  await page.fill('[data-parameter=dtBeginTime]', '2026-01-01'); await page.fill('[data-parameter=dtEndTime]', '2026-01-02'); await page.selectOption('[data-parameter=dtYYPE]', 'ALL');
+  await page.screenshot({ path: path.join(run, 'main-ready.png') });
+  await page.click('#query'); await page.waitForFunction(() => document.querySelector('#notice').open && !document.querySelector('#query').disabled);
+  assert.match(await page.locator('#notice-body').textContent(), queryBoundary); await page.click('[data-close=notice]');
+  await page.selectOption('#source', '1'); await page.waitForFunction(() => document.querySelector('[data-parameter="处方号"]') && !document.querySelector('#query').disabled);
+  await page.fill('[data-parameter="唯一号"]', '0000123'); await page.fill('[data-parameter="处方号"]', 'RX001');
+  await page.screenshot({ path: path.join(run, 'detail-ready.png') });
+  await page.click('#query'); await page.waitForFunction(() => document.querySelector('#notice').open && !document.querySelector('#query').disabled);
+  assert.match(await page.locator('#notice-body').textContent(), queryBoundary); assert.equal(await page.locator('tbody tr').count(), 0); await page.click('[data-close=notice]');
+  assert.deepEqual(errors, []); await desktop.close(); desktop = null;
+  fs.writeFileSync(path.join(run, 'PASS.txt'), 'PASS: original pending state reproduced with previous backend; reimport enables reviewed combination; SQL/identity/notes unchanged; correct main/detail parameter sets; missing values rejected; requests pass adapter and parameter validation then stop before any database connection; actual Electron import and main/detail controls verified. Packaged UI: ' + !!packagedExecutable + '. Oracle execution and business result comparison NOT RUN.\n');
+  console.log('PASS prescription checks: ' + run);
+})().catch(async e => { console.error(e); if (bridge) bridge.close(); if (desktop) { try { const page = await desktop.firstWindow(); await page.screenshot({ path: path.join(run, 'failure.png') }); await desktop.close(); } catch {} } process.exitCode = 1; });

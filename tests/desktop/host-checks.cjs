@@ -24,13 +24,17 @@ function args(extra={}){return {reportId:'built-in-demo',source:0,values:{begin:
  const rejected=assert.rejects(huge,e=>e.cancelled===true);await new Promise(resolve=>setImmediate(resolve));await b.cancel();await rejected;
  page=await b.call('query',args({values:{begin:'2026-09-10',end:'2026-09-10',department:''}}));assert.equal(page.total,2);
  await b.call('saveSettings',{name:'offline check',mode:0,host:'127.0.0.1',port:1521,service:'test',username:'readonly',password:'SYNTHETIC_SECRET',remember:true});
- assert.equal((await b.call('settings')).hasPassword,true);const saved=fs.readFileSync(path.join(run,'normal/catalog.json'),'utf8');assert.ok(!saved.includes('SYNTHETIC_SECRET'));assert.ok(!saved.includes('NEVER_LOG_THIS_PARAMETER'));assert.ok(!saved.includes('000000001'));
+ assert.equal((await b.call('settings')).hasPassword,true);const saved=fs.readFileSync(path.join(run,'normal/connection.json'),'utf8');assert.ok(!saved.includes('SYNTHETIC_SECRET'));assert.ok(!saved.includes('NEVER_LOG_THIS_PARAMETER'));assert.ok(!saved.includes('000000001'));assert.ok(!fs.existsSync(path.join(run,'normal/catalog.json')));
  await assert.rejects(b.call('testConnection',{}),/禁止真实数据库/);
  const xml=path.join(run,'sample.xml');fs.writeFileSync(xml,'<ReportQueryInfo><List><List><Name>when</Name><Text>日期</Text><ControlType Type="FS.Core.UI.Report.Common.ControlType.DateTimeType,FS.Core.UI"><CustomFormat>yyyy-MM-dd</CustomFormat></ControlType></List></List><QueryDataSource><QueryDataSource><Name>main</Name><Sql>select &apos;&amp;when&apos; from dual</Sql><SqlType>MainReportUsing</SqlType></QueryDataSource></QueryDataSource></ReportQueryInfo>');
  const imported=await b.call('import',{path:xml});assert.equal(imported.imported,1);const real=imported.reports.find(x=>!x.demo);await assert.rejects(b.call('query',{reportId:real.id,source:0,values:{when:'2026-09-10'}}),/禁止真实数据库/);
  const logs=fs.readdirSync(path.join(run,'normal/logs')).map(f=>fs.readFileSync(path.join(run,'normal/logs',f),'utf8')).join('');assert.ok(!logs.includes('SYNTHETIC_SECRET'));assert.ok(!logs.includes('NEVER_LOG_THIS_PARAMETER'));
  } finally {b.close();}
- for(const cfg of ['<ReportVisibility mode="selected" />','<ReportVisibility mode="selected"><Report id="hidden" /></ReportVisibility>']){const limited=start('scope-'+Math.random(),cfg);try{await limited.ready;assert.equal((await limited.call('bootstrap')).demoVisible,false);await assert.rejects(limited.call('demo'),/显示清单/);await assert.rejects(limited.call('select',args()),/显示清单/);}finally{limited.close();}}
+ for(const cfg of ['<ReportVisibility mode="selected" />','<ReportVisibility mode="selected"><Report id="hidden" /></ReportVisibility>']){const limited=start('scope-'+Math.random(),cfg);try{await limited.ready;assert.equal((await limited.call('bootstrap')).demoVisible,false);await assert.rejects(limited.call('demo'),/显示清单/);await assert.rejects(limited.call('select',args()),/显示清单/);
+   const hiddenImport=await limited.call('import',{path:path.join(run,'sample.xml')});assert.equal(hiddenImport.imported,1);assert.equal(hiddenImport.reports.length,0);
+   const hiddenId=require('node:crypto').createHash('sha256').update(path.resolve(run,'sample.xml').toUpperCase()).digest('hex');
+   await assert.rejects(limited.call('relatedFiles',{reportId:hiddenId}),/显示清单/);
+ }finally{limited.close();}}
  const invalid=start('invalid','<ReportVisibility mode="broken" />');await assert.rejects(invalid.ready,/启动失败|后台/);invalid.close();
  fs.writeFileSync(path.join(run,'PASS.txt'),'PASS: paging/full export, typed values, stale handles, cancellation/retry, DPAPI, offline boundary, XML import, visibility and log privacy.\n');
  console.log('PASS host checks: '+run);

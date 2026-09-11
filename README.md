@@ -1,8 +1,18 @@
 # ReportDesk · 报表管理
 
-**Electron 桌面开发版**：已新增 Windows 10/11 x64 界面，采用石墨灰、暖白与金色风格，左侧报表直接切换查询区、横排条件、执行进度与取消。构建、使用和验收边界见 [Desktop.md](docs/Desktop.md)。下文记录的是保留用于回归的 WinForms 0.1.4；Electron 版不再以 x86/旧系统为本轮目标。
+当前 Electron 0.2.0 使用会话模式：直接读取所选 HIS / LIB XML，不保存报表清单，无收藏、最近、分类和说明编辑；连接设置单独保存，旧 catalog 保留原样。详见 [本轮结果与验证](docs/Session-Workflow-20260911.md)。下文涉及 catalog、收藏及分类的操作属于保留的 WinForms 0.1.4 基线。
+
+本次 HIS 导出资料已用于实际适配：纯结果映射、静态下拉选项、复选框及常见字典恢复表格查询；菜单分类区分确认与候选。结果、剩余限制和补导出 SQL 见 [HIS-Adaptation-20260911](docs/HIS-Adaptation-20260911.md)。
+
+报表内容分类、无 SQL 定义单列和 HIS 多位置展示见 [ReportLocations](docs/ReportLocations.md)；本机知识库全量统计及处理建议见 [ReportAudit-20260911](docs/ReportAudit-20260911.md)。
+
+**Electron 桌面开发版**：已新增 Windows 10/11 x64 界面，采用统一浅色底面、暖灰与香槟金点缀，保留原有圆角进度条风格，左侧报表直接切换查询区、横排条件、执行进度与取消。构建、使用和验收边界见 [Desktop.md](docs/Desktop.md)。下文记录的是保留用于回归的 WinForms 0.1.4；Electron 版不再以 x86/旧系统为本轮目标。
 
 第一版 Windows 桌面程序：导入 HIS 查询设置 XML，按名称/别名/说明/来源搜索，分类、收藏、最近使用，生成条件表单，执行 Oracle 查询，以统一表格展示并导出 `.xlsx`。不依赖 FS/FarPoint，不复刻原报表打印版式。
+
+Electron 版支持选择 **HIS 根目录**，递归识别查询定义并检查配套 XML；在「报表说明 → 检查关联 XML」查看匹配依据。匹配文件不会自动消除未支持的交叉/映射规则。相同运行时和依赖的文件夹版可使用三文件离线更新包，无需每次复制完整 Electron，详见 [OfflineUpdate.md](docs/OfflineUpdate.md)。
+
+“门诊处方患者明细”和“普通门诊处方记录”支持原 SQL 表格查询，更新后重新导入生效；支持原明细 SQL 的中文参数绑定。原精确三文件审查保留在 [OutpatientPrescriptionAdapter.md](docs/OutpatientPrescriptionAdapter.md)。
 
 ## 使用
 

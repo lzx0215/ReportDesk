@@ -6,6 +6,9 @@ namespace ReportDesk.Core;
 
 public sealed class ReportDefinition
 {
+    public bool ScopedValidation { get; set; }
+    public List<string> SharedIssues { get; set; } = new();
+    public string AdaptationNote { get; set; } = "";
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public string SourcePath { get; set; } = "";
@@ -20,11 +23,18 @@ public sealed class ReportDefinition
     public List<QueryDefinition> Queries { get; set; } = new();
     public List<string> Issues { get; set; } = new();
     public bool IsDemo { get; set; }
-    public string Status => IsDemo ? "模拟演示" : Issues.Count > 0 ? "待适配" : Verified ? "用户已核对" : "可试查 · 未核对";
+    public string Status => IsDemo ? "模拟演示" : Issues.Count > 0 ?
+        (Queries.Exists(q => q.Kind!="ConditionUsing" && ReportReadiness.IssuesFor(this, q).Count == 0) ? "部分可试查 · 仍有待适配" : "待适配") : Verified ? "用户已核对" : "可试查 · 未核对";
 }
 
 public sealed class ParameterDefinition
 {
+    public bool Multiple { get; set; }
+    public bool TreeSelect { get; set; }
+    public string LookupSourceName { get; set; } = "";
+    public string OptionSource { get; set; } = "";
+    public List<ParameterOption> Options { get; set; } = new();
+    public string AllLabel { get; set; } = "全部";
     public string Name { get; set; } = "";
     public string Label { get; set; } = "";
     public string Kind { get; set; } = "TextBoxType";
@@ -44,8 +54,19 @@ public sealed class ParameterDefinition
     public string PadCharacter { get; set; } = "0";
 }
 
+public sealed class ParameterOption
+{
+    public string Value { get; set; } = "";
+    public string Label { get; set; } = "";
+}
+
 public sealed class QueryDefinition
 {
+    // Optional metadata; old catalogs retain the legacy completion path.
+    public string ResultRulesXml { get; set; } = "";
+    public List<string> Issues { get; set; } = new();
+    public bool IsSumRow { get; set; }
+    public string SumColumns { get; set; } = "";
     public string Name { get; set; } = "";
     public string Kind { get; set; } = "";
     public string Sql { get; set; } = "";
@@ -79,8 +100,11 @@ public sealed class Catalog
 public sealed class ImportSummary
 {
     public List<ReportDefinition> Reports { get; } = new();
+    public List<ReportDefinition> IncompleteReports { get; } = new();
     public List<string> Errors { get; } = new();
     public int Skipped { get; set; }
+    public ReportFileInventory? Inventory { get; set; }
+    public Dictionary<string, List<RelatedXmlFile>> RelatedFiles { get; } = new();
 }
 
 public sealed class QueryResult

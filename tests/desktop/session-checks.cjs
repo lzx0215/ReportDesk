@@ -1,0 +1,48 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { once } = require('node:events');
+const { Bridge } = require('../../src/ReportDesk.Desktop/bridge.cjs');
+const root = path.resolve(__dirname, '../..');
+const run = path.join(root, 'artifacts/verification/desktop', 'session-' + Date.now());
+fs.mkdirSync(run, { recursive: true });
+function start(dir) { return new Bridge(path.join(root, 'artifacts/host/ReportDesk.Host.exe'), dir, dir, true, () => {}, () => {}); }
+async function stop(b) { const exit = once(b.process, 'exit'); b.close(); await exit; }
+let current;
+(async () => {
+  const dir = path.join(run, 'existing'); fs.mkdirSync(dir);
+  const legacy = path.join(dir, 'catalog.json');
+  const legacyBytes = JSON.stringify({ Connection: { Name: 'old connection', Mode: 0, Host: 'localhost', Port: 1521, Service: 'old', Username: 'reader', ProtectedPassword: '' }, Reports: [{ Id: 'old-report', Name: 'MUST_NOT_RESTORE', Queries: [{ Sql: 'select 1 from dual' }] }] });
+  fs.writeFileSync(legacy, legacyBytes);
+  const xml = path.join(run, 'query.xml');
+  const source = '<ReportQueryInfo><QueryDataSource><QueryDataSource><Name>main</Name><Sql>select 1 from dual</Sql><SqlType>MainReportUsing</SqlType></QueryDataSource></QueryDataSource></ReportQueryInfo>';
+  fs.writeFileSync(xml, source);
+  current = start(dir); await current.ready;
+  let boot = await current.call('bootstrap'); assert.deepEqual(boot.reports, []); assert.equal(boot.settings.name, 'old connection');
+  const imported = await current.call('import', { path: xml }); assert.equal(imported.reports.length, 1);
+  assert.ok(!('category' in imported.reports[0])); assert.ok(!('favorite' in imported.reports[0])); assert.ok(!('lastUsed' in imported.reports[0]));
+  const id = imported.reports[0].id;
+  fs.writeFileSync(xml, source.replace('select 1 from dual', 'select :x from dual'));
+  assert.equal((await current.call('recheck')).reports[0].status, '待适配');
+  await assert.rejects(current.call('query', { reportId: id }), /待适配/);
+  await assert.rejects(current.call('favorite', { reportId: id }), /不支持/);
+  await assert.rejects(current.call('metadata', { reportId: id }), /不支持/);
+  assert.equal(fs.readFileSync(legacy, 'utf8'), legacyBytes); assert.ok(!fs.existsSync(path.join(dir, 'connection.json')));
+  await current.call('saveSettings', { name: 'new connection', mode: 0, host: 'localhost', port: 1521, service: 'new', username: 'reader', password: 'SESSION_TEST_SECRET', remember: true });
+  const saved = fs.readFileSync(path.join(dir, 'connection.json'), 'utf8');
+  assert.ok(!saved.includes('SESSION_TEST_SECRET') && !saved.includes('Reports') && !saved.includes('select ') && !saved.includes('query.xml'));
+  await stop(current); current = start(dir); await current.ready;
+  boot = await current.call('bootstrap'); assert.deepEqual(boot.reports, []); assert.equal(boot.settings.name, 'new connection'); assert.equal(boot.settings.hasPassword, true);
+  await assert.rejects(current.call('select', { reportId: id }), /不存在/);
+  assert.equal(fs.readFileSync(legacy, 'utf8'), legacyBytes);
+  await current.call('saveSettings', { name: 'new connection', mode: 0, host: 'localhost', port: 1521, service: 'new', username: 'reader', keepPassword: true, remember: false });
+  await stop(current); current = start(dir); await current.ready; assert.equal((await current.call('settings')).hasPassword, false);
+  await stop(current); current = null;
+  const fresh = path.join(run, 'fresh'); fs.mkdirSync(fresh); current = start(fresh); await current.ready;
+  await current.call('import', { path: xml }); await current.call('demo'); await current.call('query', { reportId: 'built-in-demo', source: 0, values: { begin: '2026-09-10', end: '2026-09-10', department: '' } });
+  assert.ok(!fs.existsSync(path.join(fresh, 'catalog.json')) && !fs.existsSync(path.join(fresh, 'connection.json')));
+  await stop(current); current = start(fresh); await current.ready; assert.deepEqual((await current.call('bootstrap')).reports, []);
+  await stop(current); current = null;
+  fs.writeFileSync(path.join(run, 'PASS.txt'), 'PASS: session import/recheck/query/restart; no report persistence; legacy connection-only fallback and untouched old catalog; independent connection settings and opt-out password persistence; retired endpoints rejected. No Oracle connection.\n');
+  console.log('PASS session checks: ' + run);
+})().catch(async e => { console.error(e); if (current) await stop(current); process.exitCode = 1; });

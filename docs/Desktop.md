@@ -2,6 +2,8 @@
 
 目标环境：Windows 10 / Windows 11 x64，安装 .NET Framework 4.8。Win7、Win8、32 位系统和网页版不在本轮实现范围。旧 WinForms 源码及构建入口保留用于回归验证；新界面在 `src/ReportDesk.Desktop`，不再用 WinForms 展示主界面。
 
+当前 Electron 使用会话报表清单：每次打开选择 HIS / LIB 目录或 XML，关闭后不恢复报表；无收藏、最近、分类和说明编辑。Host 仅在保存连接设置时写 `connection.json`，旧 catalog 只兼容读取连接设置并保持原样。WinForms 基线的 CatalogStore API 保留，不代表当前 Electron 仍保存报表库。验收见 `tests/desktop/session-checks.cjs`。
+
 ## 使用与构建
 
 ```powershell
@@ -26,18 +28,18 @@ npm start
 
 ## 操作
 
-- 左侧导入 XML 或文件夹；选择报表后，右侧直接显示该报表条件，无报表库首页。
+- 左侧导入 XML 或选择 HIS 根目录；递归按 XML 根节点识别查询和 FarPoint 版式文件，显示导入及关联摘要。报表说明中的「检查关联 XML」显示显式路径匹配、名称候选、冲突、缺失或拒绝原因。匹配文件不代表支持其交叉/映射规则，源目录应保持可访问，具体边界见 [OfflineUpdate.md](OfflineUpdate.md)。选择报表后，右侧直接显示该报表条件，无报表库首页。
 - 查询条件在表格上方横排，空间不足自动换行，可收起。文本、日期/时间及 SQL 下拉条件按定义生成。原日期格式在后台转换，不让 JavaScript 改变 SQL 参数格式。
 - 下拉条件点击“加载选项”，按需搜索、分段读取，选择编码。“全部”仅原定义提供时出现，不自动选择。
 - 查询进度采用不定百分比动画，显示后台当前操作；不提供虚假的 Oracle 完成百分比。手动取消保留；握手阶段仍可能需要等待。无应用查询计时器、行数或内存截断。
 - 全量结果留在后台内存，前端每次最多读取 200 行展示。这是传输窗口，不是查询上限。筛选和排序在后台作用于完整结果；导出当前完整视图，不重新查询，不只导出当前段。
 - 金额/长数字/日期通过带列类型的字符串传输，避免 JavaScript Number 损失精度。前导零保留；排序使用 DataView 的原始类型。可勾选当前段多行复制。
 - 切换报表或数据源、保存连接设置、重新执行查询时清除旧结果。失败/取消不把部分数据显示为完成。
-- 元数据、收藏、最近使用、核对状态沿用原 catalog。导入源变更仍由 Core 重置核对状态。不支持语义仍明确待适配。
+- 报表说明只展示 HIS 位置来源、适配建议及关联文件检查。收藏、最近、分类及可编辑说明已移除；不支持语义仍明确待适配。
 
 ## 数据、安全与配置
 
-- 继续使用 `%LOCALAPPDATA%/ReportDesk/catalog.json` 及备份；不自动迁移或改格式。更新前备份用户目录。不要同时运行旧 WinForms 与新版并编辑同一目录，以免互相覆盖。
+- Electron 不保存报表清单。`%LOCALAPPDATA%/ReportDesk/connection.json` 仅保存用户明确保存的连接设置；首次无此文件时只从旧 catalog 读取连接设置，旧文件原样保留。关闭后须重新选择 XML 来源。
 - `report-visibility.xml` 在用户启动的 `ReportDesk.exe` 同目录，启动时读取。开发模式在仓库根目录读取。缺文件显示全部、selected 空清单显示零张、错误配置停止启动。所有列表与后台报表操作按 ID 验证清单；不增加岗位编辑入口。它仍是显示偏好，不是授权。
 - 密码不回传渲染器；连接窗口可保留后台当前密码，或明确填写替换。只有勾选保存密码才用原 CurrentUser DPAPI 存储。连接测试使用未保存的当前输入，不自动保存。
 - HTML/CSS/JS 全部随程序发布，不加载远程资源。渲染进程沙箱、contextIsolation、禁用 Node 集成、严格 CSP、禁用额外窗口/导航/权限。Electron 主进程核对 IPC 发起窗口、frame 和来源。
@@ -59,3 +61,5 @@ Host 负责报表操作、参数转换、结果句柄、筛选排序、导出及
 真实 Oracle 19c、TNS/SID/多地址、服务器取消行为、HIS 口径、Win10 x64 干净机以及 Excel/WPS 人工打开检查：**NOT RUN**，沿用 Acceptance.md 现场清单。运行时支持 Windows 10 不等于所有 Windows 10 build 均已实测。
 
 当前开发版本不是已完成现场验收的正式发布。本轮没有 commit、push、PR 或自动部署。
+
+同一运行时/依赖的离线小更新可用 `powershell -File scripts/build-update.ps1 -BaseDirectory '上一份完整程序目录'` 生成，再用 `node tests/desktop/update-checks.cjs '生成的更新目录'` 验证隔离旧包的替换、真实 EXE 启动及回退。交付仅包含 app.asar、Host EXE 和 Core DLL；安装脚本检查基线哈希并备份，不替换用户数据或岗位显示配置。完整操作见 [OfflineUpdate.md](OfflineUpdate.md)。

@@ -28,7 +28,7 @@ else {
     ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     ses.setPermissionCheckHandler(() => false);
     ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !details.url.startsWith('reportdesk://app/') }));
-    window = new BrowserWindow({ title: 'ReportDesk · 报表查询', width: 1440, height: 930, minWidth: 1040, minHeight: 700, backgroundColor: '#303837', show: false, autoHideMenuBar: true,
+    window = new BrowserWindow({ title: 'ReportDesk · 报表查询', width: 1440, height: 930, minWidth: 1040, minHeight: 700, backgroundColor: '#F7F6F3', show: false, autoHideMenuBar: true,
       webPreferences: { preload: path.join(__dirname, 'preload.cjs'), partition: 'reportdesk', nodeIntegration: false, contextIsolation: true, sandbox: true, devTools: !app.isPackaged, spellcheck: false } });
     window.removeMenu();
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -52,7 +52,7 @@ function writeSafeLog(operation) {
   try { const date = new Date(); const directory = path.join(dataDirectory, 'logs'); fs.mkdirSync(directory, { recursive: true }); fs.appendFileSync(path.join(directory, `ReportDesk-${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}.log`), `${date.toISOString()} ERROR operation=${operation} version=${app.getVersion()} process=x64 message=[上下文已省略]\n`); return ''; }
   catch { return '本地错误日志写入失败。'; }
 }
-const allowed = new Set(['bootstrap','list','select','demo','definition','favorite','metadata','query','view','page','lookup','lookupPage','settings','saveSettings','testConnection','discoverTns','clear']);
+const allowed = new Set(['bootstrap','list','select','demo','definition','relatedFiles','recheck','query','view','page','lookup','lookupPage','lookupAll','settings','saveSettings','testConnection','discoverTns','clear']);
 ipcMain.handle('reportdesk:call', async (event, method, args = {}) => {
   if (event.sender !== window?.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== ui) return { ok: false, message: '非法调用来源。' };
   if (method === 'cancel') { await bridge.cancel(); return { ok: true, data: {} }; }
@@ -63,7 +63,7 @@ ipcMain.handle('reportdesk:call', async (event, method, args = {}) => {
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('参数格式无效。');
     let data;
     if (method === 'import') {
-      const choice = await dialog.showOpenDialog(window, { title: '导入报表', properties: args.folder ? ['openDirectory'] : ['openFile'], filters: [{ name: '报表 XML', extensions: ['xml'] }] });
+      const choice = await dialog.showOpenDialog(window, { title: args.folder ? '选择 HIS 根目录或报表目录（自动识别并匹配 XML）' : '导入报表查询 XML', properties: args.folder ? ['openDirectory'] : ['openFile'], filters: [{ name: '报表 XML', extensions: ['xml'] }] });
       data = choice.canceled ? null : await bridge.call('import', { folder: !!args.folder, path: choice.filePaths[0] });
     } else if (method === 'export') {
       const choice = await dialog.showSaveDialog(window, { title: '导出当前结果', defaultPath: '报表结果.xlsx', filters: [{ name: 'Excel 工作簿', extensions: ['xlsx'] }] });

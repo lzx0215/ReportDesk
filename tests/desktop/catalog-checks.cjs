@@ -1,0 +1,58 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { once } = require('node:events');
+const { Bridge } = require('../../src/ReportDesk.Desktop/bridge.cjs');
+const root = path.resolve(__dirname, '../..');
+const { _electron: electron } = require(path.join(root, 'src/ReportDesk.Desktop/node_modules/playwright'));
+const run = path.join(root, 'artifacts/verification/desktop', 'catalog-' + Date.now());
+const packed = process.argv[2] ? path.resolve(process.argv[2]) : null;
+if (packed) assert.ok(packed.startsWith(path.join(root,'artifacts/verification/desktop') + path.sep), 'Only isolated verification installations are allowed');
+const data = packed ? path.join(run,'local','ReportDesk') : path.join(run,'data'), config = packed ? path.dirname(packed) : path.join(run,'config'), xml = path.join(run,'HIS');
+const locationFile=path.join(config,'report-locations.xml');
+const originalLocations=fs.existsSync(locationFile)?fs.readFileSync(locationFile):null;
+for(const dir of [data,config,xml]) fs.mkdirSync(dir,{recursive:true});
+const query = '<ReportQueryInfo><QueryDataSource><QueryDataSource><Name>dtMain</Name><Sql>select 1 from dual</Sql><SqlType>MainReportUsing</SqlType><AddMapData>true</AddMapData><IsCross>true</IsCross></QueryDataSource></QueryDataSource></ReportQueryInfo>';
+fs.writeFileSync(path.join(xml,'普通门诊处方记录查询设置.xml'),query);
+fs.writeFileSync(path.join(xml,'配置.xml'),query.replace('<AddMapData>true</AddMapData><IsCross>true</IsCross>',''));
+fs.writeFileSync(path.join(xml,'空查询.xml'),'<ReportQueryInfo><QueryDataSource /></ReportQueryInfo>');
+fs.writeFileSync(path.join(xml,'假报表查询设置.xml'),'<configuration><Sql>select 1 from dual</Sql></configuration>');
+fs.writeFileSync(path.join(xml,'布局.xml'),'<Spread class="FarPoint.Win.Spread.FpSpread" />');
+let b, desktop;
+async function stop(){const done=once(b.process,'exit');b.close();await done;b=null;}
+(async()=>{
+ b=new Bridge(path.join(root,'artifacts/host/ReportDesk.Host.exe'),data,config,true,()=>{},()=>{});
+ const imported=await b.call('import',{folder:true,path:xml});
+ assert.equal(imported.imported,2);assert.equal(imported.pending,1);assert.equal(imported.incomplete.length,1);assert.equal(imported.skipped,3);assert.equal(imported.layouts,1);assert.equal(imported.otherXml,1);
+ const r=imported.reports.find(r=>r.name==='普通门诊处方记录');
+ const detail=await b.call('select',{reportId:r.id});assert.equal(detail.locations.length,1);assert.equal(detail.guidance[0].Code,'mapping');
+ await assert.rejects(b.call('query',{reportId:r.id}),/待适配/);
+ await stop();
+ // Simulate a legacy catalog containing an incomplete entry; loading must hide without deleting.
+ const catFile=path.join(data,'catalog.json'), cat=JSON.parse(fs.readFileSync(catFile,'utf8'));
+ cat.Reports.push({...cat.Reports[0],Id:'legacy-empty',Name:'旧空定义',Queries:[],Notes:'must keep',Favorite:true});fs.writeFileSync(catFile,JSON.stringify(cat));
+ const loc=p=>`<Location evidence="合成测试菜单"><Segment>报表中心</Segment><Segment>${p}</Segment></Location>`;
+ fs.writeFileSync(path.join(config,'report-locations.xml'),`<ReportLocations version="1"><Report id="${r.id}">${loc('测试入口甲')}${loc('测试入口乙')}</Report></ReportLocations>`);
+ b=new Bridge(path.join(root,'artifacts/host/ReportDesk.Host.exe'),data,config,true,()=>{},()=>{});
+ assert.equal((await b.call('bootstrap')).reports.length,2);
+ await assert.rejects(b.call('select',{reportId:'legacy-empty'}),/显示清单/);
+ await assert.rejects(b.call('definition',{reportId:'legacy-empty'}),/显示清单/);
+ assert.equal((await b.call('select',{reportId:r.id})).locations.length,3);
+ assert.equal(JSON.parse(fs.readFileSync(catFile)).Reports.find(r=>r.Id==='legacy-empty').Notes,'must keep');
+ await stop();
+ const env={...process.env,REPORTDESK_TEST:'1',REPORTDESK_TEST_DATA:data,REPORTDESK_TEST_CONFIG:config};delete env.ELECTRON_RUN_AS_NODE;
+ if(packed){delete env.REPORTDESK_TEST;delete env.REPORTDESK_TEST_DATA;delete env.REPORTDESK_TEST_CONFIG;env.LOCALAPPDATA=path.join(run,'local');}
+ desktop=await electron.launch(packed?{executablePath:packed,env}:{args:[path.join(root,'src/ReportDesk.Desktop')],env});const page=await desktop.firstWindow();page.setDefaultTimeout(20000);
+ await page.waitForFunction(()=>document.querySelector('#operation-status').textContent==='准备就绪。');
+ assert.equal(await page.locator('.report-item').count(),2);
+ await page.fill('#report-search','测试入口乙');await page.waitForFunction(()=>document.querySelectorAll('.report-item').length===1);
+ await page.waitForFunction(()=>document.querySelector('#report-title').textContent==='普通门诊处方记录');
+ assert.equal(await page.locator('#report-locations p').count(),3);assert.equal(await page.locator('#query').isDisabled(),true);
+ await page.screenshot({path:path.join(run,'locations.png')});
+ await page.click('#metadata-open');assert.match(await page.locator('#meta-guidance').innerText(),/纯 AddMap 结果映射已支持/);assert.match(await page.locator('#meta-locations').innerText(),/用户提供/);assert.match(await page.locator('#meta-locations').innerText(),/测试入口乙/);
+ await page.screenshot({path:path.join(run,'guidance.png')});await page.click('[data-close="metadata"]');
+ await page.fill('#report-search','配置');await page.waitForFunction(()=>document.querySelector('#report-title').textContent==='配置');assert.match(await page.locator('#report-locations').innerText(),/位置未确认/);
+ assert.equal(await page.locator('#progress').evaluate(el=>getComputedStyle(el).height),'10px');
+ await desktop.close();desktop=null;
+ fs.writeFileSync(path.join(run,'PASS.txt'),'PASS content classification, incomplete legacy entries preserved/hidden, pending guard, multiple paths, unknown locations, menu search, advice and original 10px progress bar.\n');console.log('PASS catalog checks: '+run);
+})().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{if(b)await stop();if(desktop)await desktop.close();if(packed){if(originalLocations)fs.writeFileSync(locationFile,originalLocations);else if(fs.existsSync(locationFile))fs.unlinkSync(locationFile);}});

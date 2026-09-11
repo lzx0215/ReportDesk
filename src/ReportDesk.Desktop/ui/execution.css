@@ -17,10 +17,10 @@
   width: 34px;
   height: 38px;
   flex-shrink: 0;
-  color: #f5f5f0;
+  color: var(--text-secondary);
 }
 .execution-head #operation-status {
-  color: #f5f5f0;
+  color: var(--text-primary);
   font-size: 17px;
   font-weight: 650;
   line-height: 1.6;
@@ -28,11 +28,12 @@
 }
 #cancel {
   flex-shrink: 0;
-  color: #eeeee9;
-  border-color: #e1e3e04d;
-  background: #20282655;
+  color: var(--text-primary);
+  border-color: var(--border-control);
+  background: var(--surface);
 }
-#cancel:hover { background: #ffffff12; border-color: #eeeee9aa; }
+#cancel:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--accent); }
+#cancel:disabled { color: var(--text-disabled); border-color: var(--border-subtle); background: var(--surface-soft); }
 .execution .track {
   height: 10px;
   margin-top: 14px;
@@ -49,7 +50,7 @@
 }
 .execution.done .track > div { background: #f2f2ee; }
 .execution.error .track > div { width: 0; }
-.execution.error #operation-status { color: #e8b5a8; }
+.execution.error #operation-status { color: var(--status-error); }
 @keyframes execution-flow {
   from { transform: translateX(-100%); }
   to { transform: translateX(417%); }

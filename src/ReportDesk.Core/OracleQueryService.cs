@@ -56,21 +56,21 @@ public static class OracleQueryService
     // Legacy managed driver uses synchronous I/O; caller runs on a worker thread.
     // Open uses descriptor/driver timeouts; after Open, cancellation calls OracleCommand.Cancel.
     public static QueryResult Execute(ConnectionSettings settings, string password, string template,
-        IReadOnlyDictionary<string, string> values, CancellationToken cancellation)
+        IReadOnlyDictionary<string, string> values, CancellationToken cancellation, IReadOnlyDictionary<string,string[]>? multiple = null)
     {
-        try { return ExecuteCore(settings, password, template, values, cancellation); }
+        try { return ExecuteCore(settings, password, template, values, cancellation, multiple); }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            ErrorLog.Write("Query", ex, ErrorLog.ConnectionValues(settings, password).Concat(values.Values).Concat(new[] { template }));
+            ErrorLog.Write("Query", ex, ErrorLog.ConnectionValues(settings, password).Concat(values.Values).Concat(multiple?.Values.SelectMany(x=>x)??Enumerable.Empty<string>()).Concat(new[] { template }));
             throw;
         }
     }
 
     private static QueryResult ExecuteCore(ConnectionSettings settings, string password, string template,
-        IReadOnlyDictionary<string, string> values, CancellationToken cancellation)
+        IReadOnlyDictionary<string, string> values, CancellationToken cancellation, IReadOnlyDictionary<string,string[]>? multiple)
     {
-        var query = SqlTemplate.Compile(template, values);
+        var query = SqlTemplate.Compile(template, values, multiple);
         var watch = Stopwatch.StartNew();
         using var connection = new OracleConnection(ConnectionString(settings, password));
         cancellation.ThrowIfCancellationRequested(); connection.Open(); cancellation.ThrowIfCancellationRequested();

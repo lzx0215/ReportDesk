@@ -20,6 +20,10 @@ internal static class Program
         try
         {
             ReportVisibilityChecks.Run(folder, Check);
+            ReportDiscoveryChecks.Run(folder, Check);
+            ReportCatalogChecks.Run(folder, Check);
+            HisAdapterChecks.Run(folder, Check);
+            PrescriptionAdapterChecks.Run(folder, Check, args.Length > 1 ? args[1] : null);
             Check("quoted, repeated and partial placeholders bind safely", () =>
             {
                 var attack = "x' OR 1=1 --";
@@ -32,6 +36,14 @@ internal static class Program
                 Check("reject unsupported/write syntax: " + sql, () => Throws(() => SqlTemplate.Compile(sql)));
             Check("missing parameter is an error", () => Throws(() => SqlTemplate.Compile("select '&id' from dual", new Dictionary<string, string>())));
             Check("case-insensitive repeat uses one bind", () => Assert(SqlTemplate.Compile("select '&ID', '&id' from dual").RequiredNames.Count == 1));
+            Check("Chinese quoted unquoted and repeated parameters use generated binds", () =>
+            {
+                var bound = SqlTemplate.Compile("select '&处方号', '%&处方号%' from dual where id=&唯一号 -- &注释\n", new Dictionary<string,string> { ["处方号"]="RX' OR 1=1 --", ["唯一号"]="0000123" });
+                Assert(bound.RequiredNames.SequenceEqual(new[]{"处方号","唯一号"}) && bound.Values.Count==2 && bound.Values["p1"]=="0000123" && !bound.Sql.Contains("RX'") && bound.Sql.Contains("id=:p1"));
+                Throws(()=>SqlTemplate.Compile("select '&处方号' from dual",new Dictionary<string,string>()));
+            });
+            Check("Chinese dynamic identifiers remain rejected", () =>
+            { Throws(()=>SqlTemplate.Compile("select * from &表名")); Throws(()=>SqlTemplate.Compile("select \"&列名\" from dual")); });
             Check("with select supported", () => Assert(SqlTemplate.Compile("with x as (select 1 a from dual) select a from x").Sql.StartsWith("with")));
             Check("padding and LIKE preserve configured behavior", () => Assert(SqlTemplate.Transform(new ParameterDefinition { PadLeft = true, PadLength = 5, PadCharacter = "0", IsLike = true }, "12") == "%00012%"));
             var xml = "<?xml version=\"1.0\" encoding=\"gb2312\"?><ReportQueryInfo><List><List><Name>when</Name><Text>开始日期</Text><ControlType Type=\"FS.Core.UI.Report.Common.ControlType.DateTimeType,FS.Core.UI\"><CustomFormat>yyyy-MM-dd 00:00:00</CustomFormat></ControlType></List></List><QueryDataSource><QueryDataSource><Name>main</Name><Sql>select '&amp;when' 日期, '&amp;CurrentDeptID' 科室 from dual</Sql><SqlType>MainReportUsing</SqlType></QueryDataSource></QueryDataSource></ReportQueryInfo>";

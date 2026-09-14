@@ -87,13 +87,13 @@ function clearResult() { page = null; selectedRows.clear(); sortColumn = -1; des
 async function select(id, source = 0) {
   $('#report-locations').replaceChildren(); $('#report-locations').hidden = true;
   clearResult(); selected = id; detail = null; fields.clear(); $('#parameters').replaceChildren(); $('#source').replaceChildren(); $('#issues').textContent = '';
-  if (!id) { await call('clear'); $('#report-title').textContent = '选择一张报表'; $('#report-status').textContent = '选择 HIS / LIB 目录或 XML，直接读取报表。'; renderList(); return; }
+  if (!id) { await call('clear'); $('#report-title').textContent = '选择一张报表'; $('#report-status').textContent = '选择报表目录或 XML，直接读取报表。'; renderList(); return; }
   try { detail = await call('select', { reportId: id, source }); }
   catch (e) { selected = null; $('#report-title').textContent = '请选择有效的报表'; throw e; }
   $('#report-title').textContent = detail.name; $('#report-status').textContent = detail.status + (detail.demo ? ' · 完全离线生成' : ' · ' + detail.path);
   if (!detail.demo) {
     const box = $('#report-locations'); box.hidden = false;
-    box.append(element('strong', 'HIS 位置'));
+    box.append(element('strong', '外部位置'));
     for (const location of detail.locations || []) { const row = element('p', (location.Candidate ? '候选（XML 关联未核实）：' : '') + location.Path + (location.Active === false ? '〔菜单已停用〕' : '')); row.title = location.Evidence + '；' + location.Match; box.append(row); }
     if (!detail.locations?.length) box.append(element('p', '位置未确认（缺少菜单与报表的对应资料）'));
     else box.append(element('small', '已知位置，可能不完整；来源及匹配依据见“报表说明”。'));
@@ -148,10 +148,10 @@ for (const [id,folder] of [['#import-file',false],['#import-folder',true]]) $(id
   reports = imported.reports;  await select(filteredReports()[0]?.id ?? null);
   const text = `导入 ${imported.imported} 张；待适配 ${imported.pending} 张；发现版式 XML ${imported.layouts} 份；其他 XML ${imported.otherXml || 0} 份；仅条件/不完整定义 ${imported.incomplete?.length || 0} 份；警告/失败 ${imported.errors.length} 项。`;
   progress(text);
-  notice('导入与匹配结果', text + `\n跳过独立导入 ${imported.skipped} 份。单文件导入时，版式/其他数量是同目录配套扫描数。\n显式路径匹配 ${imported.matched} 项；名称候选 ${imported.candidates} 项；缺失/冲突/拒绝 ${imported.unresolved} 项。\n版式、其他配置和无查询 SQL 的定义不作为独立报表显示；原文件保留。待适配的查询报表仍显示。匹配到配套文件不代表已支持交叉或映射规则。\n选择报表 → 报表说明，可查看适配建议、所有已知 HIS 位置及关联 XML。` + (imported.incomplete?.length ? '\n\n仅条件/不完整定义（需要完整查询定义或 HIS 数据获取实现）：\n' + imported.incomplete.join('\n') : '') + (imported.errors.length ? '\n\n' + imported.errors.join('\n') : ''));
+  notice('导入与匹配结果', text + `\n跳过独立导入 ${imported.skipped} 份。单文件导入时，版式/其他数量是同目录配套扫描数。\n显式路径匹配 ${imported.matched} 项；名称候选 ${imported.candidates} 项；缺失/冲突/拒绝 ${imported.unresolved} 项。\n版式、其他配置和无查询 SQL 的定义不作为独立报表显示；原文件保留。待适配的查询报表仍显示。匹配到配套文件不代表已支持交叉或映射规则。\n选择报表 → 报表说明，可查看适配建议、所有已知外部位置及关联 XML。` + (imported.incomplete?.length ? '\n\n仅条件/不完整定义（需要完整查询定义或数据获取实现）：\n' + imported.incomplete.join('\n') : '') + (imported.errors.length ? '\n\n' + imported.errors.join('\n') : ''));
 });
 $('#sql').onclick = () => task('正在读取定义…', async () => { const def = await call('definition', { reportId: selected }); notice(def.title + ' · SQL（只读）', def.text); });
-$('#metadata-open').onclick = () => { $('#meta-locations').textContent = (detail.locations || []).map(l => l.Path + '\n来源：' + l.Evidence + '\n依据：' + l.Match).join('\n\n') || '位置未确认。'; $('#meta-locations').textContent += '\n' + (detail.locationWarnings || []).join('\n'); $('#meta-guidance').textContent = (detail.guidance || []).map(g => g.Title + '\n' + g.Action).join('\n\n') || '没有静态适配阻塞项；仍需在内网与 HIS 同条件核对。'; $('#metadata').showModal(); };
+$('#metadata-open').onclick = () => { $('#meta-locations').textContent = (detail.locations || []).map(l => l.Path + '\n来源：' + l.Evidence + '\n依据：' + l.Match).join('\n\n') || '位置未确认。'; $('#meta-locations').textContent += '\n' + (detail.locationWarnings || []).join('\n'); $('#meta-guidance').textContent = (detail.guidance || []).map(g => g.Title + '\n' + g.Action).join('\n\n') || '没有静态适配阻塞项；仍需在现场与原系统同条件核对。'; $('#metadata').showModal(); };
 $('#related-xml').onclick = () => task('正在检查关联 XML…', async () => {
   const result = await call('relatedFiles', { reportId: selected });
   const statuses = { Matched: '已按显式路径匹配', Candidate: '名称候选，关联待核对', Ambiguous: '多个候选，未自动选择', Missing: '未找到', Rejected: '引用超出扫描范围或格式不支持' };
@@ -160,7 +160,7 @@ $('#related-xml').onclick = () => task('正在检查关联 XML…', async () => 
   notice('关联 XML（只读检查）', `扫描目录：${result.root}\n查询定义：${result.query}\n\n` + (lines.join('\n\n') || '没有识别到可匹配的版式引用。') + '\n\n配套文件仅识别关联，不执行版式中的映射或交叉规则；原文件保持不变。' + (result.warnings.length ? '\n\n扫描警告：\n' + result.warnings.join('\n') : ''));
 });
 $('#logs').onclick = () => task('正在打开日志目录…', () => call('openLogs'));
-$('#help').onclick = () => notice('使用说明','首次选择 HIS / LIB 目录或 XML 后自动记住路径，下次打开自动读取；请保持原路径可访问。连接成功后自动保存配置，默认加密保存密码，也可取消勾选。\n左侧选择报表 → 选择数据源并填写条件 → 开始查询。\n下拉参数须先加载选项；隐含参数填写已确认的编码，不自动模拟 HIS 身份。\n结果分页只是展示分段，筛选、排序、Excel 导出作用于完整已加载结果，不重新查询。\n查询不设应用超时或行数上限，内存不足会失败。进度条表示正在工作，不表示已知完成百分比。\n报表显示由程序同目录 report-visibility.xml 配置，修改后重启；它不是数据库授权。');
+$('#help').onclick = () => notice('使用说明','首次选择报表目录或 XML 后自动记住路径，下次打开自动读取；请保持原路径可访问。连接成功后自动保存配置，默认加密保存密码，也可取消勾选。\n左侧选择报表 → 选择数据源并填写条件 → 开始查询。\n下拉参数须先加载选项；隐含参数填写已确认的编码，不自动模拟登录身份。\n结果分页只是展示分段，筛选、排序、Excel 导出作用于完整已加载结果，不重新查询。\n查询不设应用超时或行数上限，内存不足会失败。进度条表示正在工作，不表示已知完成百分比。\n报表显示由程序同目录 report-visibility.xml 配置，修改后重启；它不是数据库授权。');
 for (const b of document.querySelectorAll('[data-close]')) b.onclick = () => { if (busy && b.dataset.close !== 'notice') return; $('#'+b.dataset.close).close(); if (b.dataset.close === 'connection') $('#conn-password').value = ''; };
 for (const d of document.querySelectorAll('dialog')) d.addEventListener('cancel', e => { if (busy) e.preventDefault(); else if (d.id === 'connection') $('#conn-password').value = ''; });
 function connectionMode() { const tns = $('#conn-mode').value === '1'; $('#tns-fields').hidden = !tns; $('#direct-fields').hidden = tns; $('#conn-password').disabled = $('#conn-keep').checked; }

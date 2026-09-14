@@ -1,8 +1,9 @@
-// Source recovery checks using copies of an actual LIB XML; no database/results.
+// Source recovery checks using copied XML; no database/results.
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),crypto=require('node:crypto');
 const {once}=require('node:events'),{Bridge}=require('../../src/ReportDesk.Desktop/bridge.cjs');
-const root=path.resolve(__dirname,'../..'),run=path.join(root,'artifacts/verification/desktop','lib-persistence-'+Date.now());
-const original=process.argv[2]||'D:/系统知识库/00_Inbox/yljhis/LIB/LIB/Config/Xml/普通门诊处方记录查询设置.xml';
+const root=path.resolve(__dirname,'../..'),run=path.join(root,'artifacts/verification/desktop','report-persistence-'+Date.now());
+const original=process.argv[2];
+if(!original) throw new Error('Usage: node tests/desktop/report-persistence-checks.cjs <query-xml>');
 const hash=f=>crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
 fs.mkdirSync(run,{recursive:true});const originalHash=hash(original);
 const data=path.join(run,'data'),folder=path.join(run,'source'),other=path.join(run,'second-source');
@@ -29,6 +30,6 @@ let b;async function stop(){const done=once(b.process,'exit');b.close();await do
  fs.writeFileSync(settingsPath,'BROKEN-TEST-CONFIG');b=start();await b.ready;boot=await b.call('bootstrap');assert.equal(boot.reports.length,0);assert.ok(boot.warnings.length>0);
  await assert.rejects(b.call('import',{path:folder,folder:true}));assert.equal(fs.readFileSync(settingsPath,'utf8'),'BROKEN-TEST-CONFIG');await stop();
  assert.equal(hash(original),originalHash);assert.equal(hash(xml),originalHash);
- fs.writeFileSync(path.join(run,'PASS.txt'),'PASS actual LIB source path persistence, duplicate import, multiple sources, restart, missing source recovery, visibility filtering, corrupt preferences preserved, original XML hashes. Oracle NOT RUN.');
+ fs.writeFileSync(path.join(run,'PASS.txt'),'PASS source path persistence, duplicate import, multiple sources, restart, missing source recovery, visibility filtering, corrupt preferences preserved, original XML hashes. Oracle NOT RUN.');
  console.log('PASS '+run);
 })().catch(async e=>{console.error(e);if(b)await stop();process.exitCode=1;});

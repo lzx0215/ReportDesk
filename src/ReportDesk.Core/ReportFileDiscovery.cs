@@ -115,7 +115,7 @@ public static class ReportFileDiscovery
             }
             else
             {
-                // HIS \Config\Xml is relative to the selected HIS root, not the drive root.
+                // The configured relative path is relative to the selected report root, not the drive root.
                 if (!normalized.StartsWith("\\", StringComparison.Ordinal)) exact.Add(Path.GetFullPath(Path.Combine(Path.GetDirectoryName(source)!, normalized)));
                 exact.Add(Path.GetFullPath(Path.Combine(inventory.Root, normalized.TrimStart('\\'))));
             }
@@ -140,7 +140,7 @@ public static class ReportFileDiscovery
         var full = Path.GetFullPath(queryPath);
         using var reader = XmlReader.Create(full, ReaderSettings()); var root = XDocument.Load(reader).Root!;
         var reference = (root.Element("QueryFilePath")?.Value ?? "").Replace('/', '\\');
-        // Infer an HIS root only from an exact self-reference suffix. Otherwise stay in the source directory.
+        // Infer a report root only from an exact self-reference suffix. Otherwise stay in the source directory.
         if (reference.StartsWith("\\", StringComparison.Ordinal) && !reference.StartsWith("\\\\", StringComparison.Ordinal) &&
             !reference.Split('\\').Contains("..") && full.EndsWith(reference, StringComparison.OrdinalIgnoreCase))
         {

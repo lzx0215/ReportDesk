@@ -116,10 +116,10 @@ internal static class HisAdapterChecks
             Assert(b.Sql.Contains("ON OVERFLOW TRUNCATE") && !b.Sql.Contains("x' OR"));
             foreach (var sql in new[] { "truncate table t", "select count(x ON OVERFLOW TRUNCATE) from t", "select listagg(x, ',') ON OVERFLOW TRUNCATE from t", "select '&x.Value' from dual", "select &x.Rows[0] from dual" }) Reject(() => SqlTemplate.Compile(sql));
         });
-        check("menu-derived categories preserve manual categories and candidate evidence", () => {
+        check("location categories stay unknown until external evidence is configured", () => {
             var map = ReportLocations.Load(Path.Combine(folder, "absent-locations.xml"));
-            var r = new ReportDefinition { SourcePath = "普通门诊处方记录查询设置.xml" };
-            Assert(map.CategoryFor(r) == "药剂科"); r.Category = "自定义"; Assert(map.CategoryFor(r) == "自定义");
+            var r = new ReportDefinition { SourcePath = "sample-query.xml" };
+            Assert(map.CategoryFor(r) == "未分类"); r.Category = "自定义"; Assert(map.CategoryFor(r) == "自定义");
         });
     }
     private static void Assert(bool v) { if (!v) throw new Exception("HIS adapter assertion failed"); }

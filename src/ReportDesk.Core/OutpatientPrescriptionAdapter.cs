@@ -3,8 +3,8 @@ using System.IO;
 
 namespace ReportDesk.Core;
 
-// A reviewed, bounded table adapter, not a general implementation of the HIS Map engine.
-// Review evidence: docs/OutpatientPrescriptionAdapter.md. Never identify a report by its filename alone.
+// A reviewed, bounded table adapter, not a general implementation of the report map engine.
+// It requires exact content hashes and never identifies a report by its filename alone.
 public static class OutpatientPrescriptionAdapter
 {
     public const string QueryHash = "7aac5c3c2adb9e63714309f0f81ab28f510c59e81ae1e25595bedd7ab111f35c";

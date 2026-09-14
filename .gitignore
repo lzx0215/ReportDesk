@@ -14,3 +14,6 @@ catalog.json
 catalog.json.bak
 report-visibility.xml
 tnsnames.ora
+
+# Local agent instructions; keep available in the checkout, never publish.
+AGENTS.md

@@ -1,18 +1,16 @@
 # ReportDesk · 报表管理
 
-当前 Electron 0.2.0 首次导入 HIS / LIB 目录或 XML 后自动记住来源路径，后续启动自动读取；点击「连接并保存」成功后自动保存配置，默认以当前 Windows 用户 DPAPI 加密保存密码，可取消勾选。无收藏、最近、分类和说明编辑；不保存查询参数或结果，旧 catalog 保留原样。详见 [持久化行为与验证](docs/Verification-Persistence-20260914.md)。下文涉及 catalog、收藏及分类的操作属于保留的 WinForms 0.1.4 基线。
+当前 Electron 0.2.0 首次导入外部报表目录或 XML 后自动记住来源路径，后续启动自动读取；点击「连接并保存」成功后自动保存配置，默认以当前 Windows 用户 DPAPI 加密保存密码，可取消勾选。无收藏、最近、分类和说明编辑；不保存查询参数或结果，旧 catalog 保留原样。详见 [持久化行为与验证](docs/Verification-Persistence-20260914.md)。下文涉及 catalog、收藏及分类的操作属于保留的 WinForms 0.1.4 基线。
 
-本次 HIS 导出资料已用于实际适配：纯结果映射、静态下拉选项、复选框及常见字典恢复表格查询；菜单分类区分确认与候选。结果、剩余限制和补导出 SQL 见 [HIS-Adaptation-20260911](docs/HIS-Adaptation-20260911.md)。
-
-报表内容分类、无 SQL 定义单列和 HIS 多位置展示见 [ReportLocations](docs/ReportLocations.md)；本机知识库全量统计及处理建议见 [ReportAudit-20260911](docs/ReportAudit-20260911.md)。
+报表内容分类、无 SQL 定义单列和外部位置配置见 [ReportLocations](docs/ReportLocations.md)。
 
 **Electron 桌面开发版**：已新增 Windows 10/11 x64 界面，采用统一浅色底面、暖灰与香槟金点缀，保留原有圆角进度条风格，左侧报表直接切换查询区、横排条件、执行进度与取消。构建、使用和验收边界见 [Desktop.md](docs/Desktop.md)。下文记录的是保留用于回归的 WinForms 0.1.4；Electron 版不再以 x86/旧系统为本轮目标。
 
 第一版 Windows 桌面程序：导入 HIS 查询设置 XML，按名称/别名/说明/来源搜索，分类、收藏、最近使用，生成条件表单，执行 Oracle 查询，以统一表格展示并导出 `.xlsx`。不依赖 FS/FarPoint，不复刻原报表打印版式。
 
-Electron 版支持选择 **HIS 根目录**，递归识别查询定义并检查配套 XML；在「报表说明 → 检查关联 XML」查看匹配依据。匹配文件不会自动消除未支持的交叉/映射规则。相同运行时和依赖的文件夹版可使用三文件离线更新包，无需每次复制完整 Electron，详见 [OfflineUpdate.md](docs/OfflineUpdate.md)。
+Electron 版支持选择 **报表根目录**，递归识别查询定义并检查配套 XML；在「报表说明 → 检查关联 XML」查看匹配依据。匹配文件不会自动消除未支持的交叉/映射规则。相同运行时和依赖的文件夹版可使用三文件离线更新包，无需每次复制完整 Electron，详见 [OfflineUpdate.md](docs/OfflineUpdate.md)。
 
-“门诊处方患者明细”和“普通门诊处方记录”支持原 SQL 表格查询，更新后重新导入生效；支持原明细 SQL 的中文参数绑定。原精确三文件审查保留在 [OutpatientPrescriptionAdapter.md](docs/OutpatientPrescriptionAdapter.md)。
+已适配的表格查询会在更新后重新导入生效；支持原明细 SQL 的中文参数绑定。
 
 ## 使用
 
@@ -83,10 +81,10 @@ powershell -File scripts/build.ps1
 
 该命令生成 x86/x64 两包、运行独立检查程序和 WinForms 离线冒烟检查。产物：`artifacts/packages`；本版证据：`artifacts/verification/0.1.4`。任一步失败会停止，不声称 Win10 或 Oracle 验收通过。UI 中测试连接的成功/失败使用注入的模拟结果，自动发现使用合成目录，不读取本机真实 Oracle 配置。模拟错误日志写入隔离的验证目录。岗位显示检查使用隔离报表库和配置文件，覆盖同名 ID、各导航入口、新导入、演示、模拟查询/导出、空清单、重启和错误配置。
 
-可选真实定义目录只读扫描：
+可选外部定义目录只读扫描：
 
 ```powershell
-powershell -File scripts/build.ps1 -ScanDirectory 'D:\系统知识库\00_Inbox\yljhis\reports'
+powershell -File scripts/build.ps1 -ScanDirectory '<外部报表定义目录>'
 ```
 
 离线检查涵盖参数转义/绑定、危险及不支持语法拒绝、编码、XXE、同名来源、更新状态重置、目录备份、DPAPI、导出原子性/编号/精度/公式字符串、模拟数据筛选。UI 检查运行模拟查询、搜索、收藏、结果筛选、排序、导出并保存界面截图。

@@ -29,22 +29,6 @@ public sealed class ReportLocations
     public static ReportLocations Load(string file)
     {
         var result = new ReportLocations();
-        // User-confirmed menu path, not inferred from report name/category.
-        result.entries.Add(new Entry { Selector = "file", Value = "普通门诊处方记录查询设置.xml", Locations = new()
-        {
-            new ReportLocation { Path = "报表中心 → 各职能科室用表 → 药剂科 → 抗菌药物查询", Evidence = "用户提供（2026-09-11）；尚无完整菜单导出", Match = "文件名关联，版本未核对" }
-        } });
-        using (var stream = typeof(ReportLocations).Assembly.GetManifestResourceStream("ReportDesk.HisMenuCandidates"))
-        {
-            if (stream != null)
-                foreach (var report in XDocument.Load(stream).Root!.Elements("Report"))
-                    result.entries.Add(new Entry { Selector = "hash", Value = (string)report.Attribute("hash")!,
-                        Locations = report.Elements("Location").Select(l => new ReportLocation {
-                            Path = string.Join(" → ", l.Elements("Segment").Select(s => s.Value)), Candidate = true,
-                            Active = (string?)l.Attribute("active") == "true",
-                            Evidence = "2026-09-11 菜单/资源 Excel；菜单 ID " + (string?)l.Attribute("menu") + "，资源 ID " + (string?)l.Attribute("resource"),
-                            Match = "同名通用报表菜单候选；缺少菜单到 XML 的绑定记录" }).ToList() });
-        }
         if (!File.Exists(file)) return result;
         try
         {

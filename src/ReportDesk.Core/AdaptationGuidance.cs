@@ -30,7 +30,7 @@ public static class AdaptationGuidance
         if (message.Contains("分组数据源")) return A("group", "分组查询", "核对分组 SQL、分组条件与主查询之间的参数传递及汇总口径，适配后对照 HIS 的分组结果。");
         if (message.Contains("参数名为空或重复")) return A("parameter", "参数定义冲突", "核对原 XML 的参数名、控件名及 SQL 引用，区分重复定义和真实联动；取得一致定义后重新导入。");
         if (message.Contains("没有查询 SQL")) return A("incomplete", "仅条件/不完整查询定义", "查找包含 QueryDataSource/Sql 的完整定义，或提供 HIS 窗口的数据获取实现。这类文件单列保留，不显示为独立报表。");
-        if (message.Contains("发现全角括号")) return A("sql-parentheses", "SQL 中文括号", "按提示行列核对括号。在修正副本中只修改该标点后重新导入；不要替换字符串、列名或注释中的中文符号。已核对的危重抢救报表版本由程序修正导入副本，原文件保留。");
+        if (message.Contains("发现全角括号")) return A("sql-parentheses", "SQL 中文括号", "按提示行列核对括号。在修正副本中只修改该标点后重新导入；不要替换字符串、列名或注释中的中文符号。已核对版本由程序修正导入副本，原文件保留。");
         if (message.Contains("发现原生绑定变量")) return A("sql-bind", "SQL 原生参数尚未适配", "开发处理：按提示行列查明冒号参数的来源和类型，再实现绑定；不能将参数值直接拼入 SQL，也不能直接删除冒号。");
         if (message.Contains("发现数据库链接")) return A("sql-link", "SQL 跨库链接尚未适配", "核对 @ 后的链接、目标数据库及现场账号权限；不能直接删除链接或改为当前库的同名表。");
         if (message.Contains("发现语句中间的分号")) return A("sql-statements", "SQL 含语句分隔符", "开发处理：核对是否包含多条独立语句或前置处理；不能简单删掉中间分号后执行。");

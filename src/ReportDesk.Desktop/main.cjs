@@ -63,7 +63,7 @@ ipcMain.handle('reportdesk:call', async (event, method, args = {}) => {
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('参数格式无效。');
     let data;
     if (method === 'import') {
-      const choice = await dialog.showOpenDialog(window, { title: args.folder ? '选择 HIS 根目录或报表目录（自动识别并匹配 XML）' : '导入报表查询 XML', properties: args.folder ? ['openDirectory'] : ['openFile'], filters: [{ name: '报表 XML', extensions: ['xml'] }] });
+      const choice = await dialog.showOpenDialog(window, { title: args.folder ? '选择报表根目录或报表目录（自动识别并匹配 XML）' : '导入报表查询 XML', properties: args.folder ? ['openDirectory'] : ['openFile'], filters: [{ name: '报表 XML', extensions: ['xml'] }] });
       data = choice.canceled ? null : await bridge.call('import', { folder: !!args.folder, path: choice.filePaths[0] });
     } else if (method === 'export') {
       const choice = await dialog.showSaveDialog(window, { title: '导出当前结果', defaultPath: '报表结果.xlsx', filters: [{ name: 'Excel 工作簿', extensions: ['xlsx'] }] });

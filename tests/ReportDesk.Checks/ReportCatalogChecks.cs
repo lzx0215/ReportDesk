@@ -35,11 +35,11 @@ internal static class ReportCatalogChecks
             var map = ReportLocations.Load(cfg); Assert(map.For(r).Count == 3 && map.Warnings.Count == 0);
             var other = new ReportDefinition { SourcePath = r.SourcePath, Id = "other", SourceHash = "other" }; Assert(map.For(other).Count == 0);
         });
-        check("known user location stays distinct from unconfirmed similarly named reports", () =>
+        check("missing location configuration stays unknown", () =>
         {
             var map = ReportLocations.Load(Path.Combine(dir, "missing.xml"));
-            Assert(map.For(new ReportDefinition { SourcePath = "普通门诊处方记录查询设置.xml" }).Single().Evidence.Contains("用户提供"));
-            Assert(map.For(new ReportDefinition { SourcePath = "门诊处方患者明细查询设置.xml" }).Count == 0);
+            Assert(map.For(new ReportDefinition { SourcePath = "sample-query.xml" }).Count == 0);
+            Assert(map.CategoryFor(new ReportDefinition { SourcePath = "sample-query.xml" }) == "未分类");
             Assert(map.For(DemoData.Report()).Count == 0);
         });
         check("invalid or DTD location config applies no partial external mapping", () =>

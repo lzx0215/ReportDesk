@@ -285,7 +285,7 @@ internal sealed class Service : IDisposable
         foreach (var source in sources)
         {
             token.ThrowIfCancellationRequested();
-            progress("正在自动读取已保存的 HIS / LIB 来源…");
+            progress("正在自动读取已保存的报表来源…");
             try
             {
                 var summary = source.Folder ? ReportImporter.ImportFolder(source.Path, token, progress) : ReportImporter.ImportWithRelated(source.Path, token, progress);
@@ -330,7 +330,7 @@ internal sealed class Service : IDisposable
             case "relatedFiles":
                 var relatedReport = Report(a);
                 if (relatedReport.IsDemo) throw new InvalidOperationException("内置演示没有外部 XML 文件。");
-                if (!File.Exists(relatedReport.SourcePath)) throw new InvalidOperationException("原查询 XML 已移动或不可访问，请重新选择 HIS 根目录导入。");
+                if (!File.Exists(relatedReport.SourcePath)) throw new InvalidOperationException("原查询 XML 已移动或不可访问，请重新选择报表根目录导入。");
                 progress("正在检查关联 XML 文件…");
                 var relatedRoot = importRoots.TryGetValue(relatedReport.Id, out var rememberedRoot) ? rememberedRoot : ReportFileDiscovery.InferRoot(relatedReport.SourcePath);
                 var inventory = ReportFileDiscovery.Scan(relatedRoot, token, progress);

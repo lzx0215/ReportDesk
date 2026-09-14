@@ -4,6 +4,7 @@ const api = window.reportDesk;
 let reports = [], selected = null, detail = null, page = null, busy = false, dead = false, mode = 'all', sortColumn = -1, descending = false;
 let selectedRows = new Set(), lookupPage = null, lookupTarget = null, settings = null;
 const fields = new Map();
+const queryFields = new window.QueryFieldsPanel($('.fields'), $('#parameters'), $('#source'), $('#query'));
 function element(tag, text, className) { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (className) n.className = className; return n; }
 // Local presentation-only icons; report names and messages still use textContent.
 const iconPaths = {
@@ -103,14 +104,14 @@ async function select(id, source = 0) {
   $('#issues').textContent = blocking.length ? '当前数据源待适配，不能查询：\n' + blocking.join('\n') : (detail.issues.length ? '当前数据源可试查；其他数据源仍待适配，详情见报表说明。\n' : '') + (detail.adaptation || '');
   for (const source of detail.sources) $('#source').add(new Option(source.name, source.index)); $('#source').value = String(detail.source);
   for (const p of detail.parameters) {
-    const label = element('label', p.label + (p.implicitValue ? '（已确认编码）' : ''));
     let input;
     if (p.multiple) { input=element('input'); input.readOnly=true; input.placeholder='请加载并选择编码'; input.dataset.selections='[]'; }
     else if (p.kind === 'ComboBoxType' || p.treeSelect) { input = element('select'); input.add(new Option('请选择', '')); input.options[0].disabled = true; const choices = [...(p.hasAll && !p.treeSelect ? [{Value:p.allValue,Label:p.allLabel || '全部'}] : []), ...(p.options || [])]; for (const choice of choices) { const option = new Option(choice.Label, choice.Value); option.dataset.choice = 'true'; input.add(option); } input.selectedIndex = 0; }
     else { input = element('input'); if (p.kind === 'DateTimeType') { const dateOnly = !/[Hhmsft]/.test(p.format); input.type = dateOnly ? 'date' : 'datetime-local'; input.step = '1'; input.value = dateOnly ? p.initial.slice(0,10) : p.initial; } else if (p.kind === 'CheckBoxType') { input.type = 'checkbox'; input.checked = p.initial === 'True'; } else { input.type = 'text'; input.value = p.initial || ''; } }
-    input.dataset.parameter = p.name; label.append(input); fields.set(p.name, { input, definition: p });
-    if ((p.kind === 'ComboBoxType' || p.treeSelect) && p.lookup) { const row = element('div', undefined, 'field-actions'); const b = element('button', '加载选项'); b.onclick = () => task('正在加载选项…', () => loadLookup(p)); row.append(b); label.append(row); }
-    $('#parameters').append(label);
+    input.dataset.parameter = p.name; fields.set(p.name, { input, definition: p });
+    let auxiliary;
+    if ((p.kind === 'ComboBoxType' || p.treeSelect) && p.lookup) { auxiliary = element('button', '加载选项'); auxiliary.onclick = () => task('正在加载选项…', () => loadLookup(p)); }
+    queryFields.append(p, input, auxiliary);
   }
   renderList(); progress('当前报表尚未查询。');
 }

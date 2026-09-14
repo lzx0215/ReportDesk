@@ -81,22 +81,30 @@ main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 #report-status { font-size: 13px; color: var(--text-secondary); margin-top: 7px; line-height: 1.5; overflow-wrap: anywhere; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .work-head .actions { margin-left: auto; }
-.conditions { padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid var(--border-subtle); flex-shrink: 0; }
-.section-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.conditions { padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--border-subtle); flex-shrink: 0; }
+.section-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .section-title button { border: 0; color: var(--text-secondary); padding: 0 4px; min-height: 24px; font-size: 12px; }
 .section-title .icon { width: 14px; height: 14px; }
-.fields { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
-.fields > label, .parameters > label { flex: 1 1 160px; min-width: 145px; max-width: 320px; }
-/* Native date-time fields need room for seconds and the calendar affordance. */
-.fields label:has(input[type=datetime-local]) { flex-basis: 245px; min-width: 245px; }
+.query-fields-panel { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: flex-end; }
+.query-field { flex: 0 1 var(--preferred-width); min-width: min(100%, var(--minimum-width)); max-width: min(100%, var(--preferred-width)); display: flex; flex-direction: column; gap: 5px; }
+.query-field.size-s { --preferred-width: 144px; --minimum-width: 120px; }
+.query-field.size-m { --preferred-width: 208px; --minimum-width: 180px; }
+.query-field.size-l { --preferred-width: 304px; --minimum-width: 208px; }
+.query-field.size-xl { --preferred-width: 416px; --minimum-width: 248px; }
+/* Native date-time controls need room for seconds and the calendar affordance. */
+.query-field.size-m.has-time { --preferred-width: 248px; --minimum-width: 248px; }
+.query-field > label { overflow-wrap: anywhere; }
+.control-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.control-row > input, .control-row > select { flex: 1 1 0; width: 0; height: 36px; font-size: 14px; }
+.control-row > button { flex: 0 0 auto; height: 36px; padding: 4px 7px; font-size: 12px; }
+.query-check > label { flex-direction: row; align-items: center; gap: 7px; min-height: 36px; }
+.query-check input[type=checkbox] { flex: 0 0 15px; }
+.query-check span { min-width: 0; }
 .parameters { display: contents; }
-.fields input, .fields select { height: 36px; font-size: 14px; }
-.field-actions { display: flex; gap: 4px; }
-.field-actions button { padding: 3px 7px; min-height: 26px; font-size: 12px; }
 .primary { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--accent-on-fill); font-size: 14px; font-weight: 500; }
 .primary:hover:not(:disabled) { background: var(--accent-fill-hover); border-color: var(--accent); }
 .primary:active:not(:disabled) { background: var(--accent-fill-hover); border-color: var(--accent-strong); }
-#query { height: 38px; min-width: 130px; }
+#query.query-action { flex: 0 0 128px; width: 128px; min-width: 128px; height: 36px; align-self: flex-end; }
 .result { display: flex; flex-direction: column; flex: 1; min-height: 190px; }
 .result-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; flex-shrink: 0; }
 .result-tools h2 { margin-right: auto; }
@@ -154,7 +162,6 @@ summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; margin
   .sidebar { padding: 22px 12px 18px; }
   .nav, footer { padding-left: 20px; padding-right: 20px; }
   .rail { padding: 17px 5px; }
-  .fields > label, .parameters > label { flex-basis: 150px; }
   .nav::before, .work-head::after { display: none; }
 }
 

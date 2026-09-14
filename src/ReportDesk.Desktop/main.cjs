@@ -17,7 +17,7 @@ if (!lock) app.quit();
 else {
   app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
   app.whenReady().then(async () => {
-    const assets = new Set(['/index.html', '/styles.css', '/execution.css', '/renderer.js']);
+    const assets = new Set(['/index.html', '/styles.css', '/execution.css', '/query-form.js', '/renderer.js']);
     const ses = session.fromPartition('reportdesk');
     ses.protocol.handle('reportdesk', request => {
       const url = new URL(request.url);

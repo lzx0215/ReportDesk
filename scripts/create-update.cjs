@@ -19,7 +19,7 @@ const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).d
   for (const relative of files) if (!fs.existsSync(path.join(baseline,relative))) throw new Error('Baseline file missing: '+relative);
   // Only these fixed files are executable app sources; no node_modules, secrets or build tooling.
   const staged = path.join(output,'build-source'); fs.mkdirSync(staged,{recursive:true});
-  for (const relative of ['package.json','main.cjs','preload.cjs','bridge.cjs','ui/index.html','ui/styles.css','ui/execution.css','ui/renderer.js']) {
+  for (const relative of ['package.json','main.cjs','preload.cjs','bridge.cjs','ui/index.html','ui/styles.css','ui/execution.css','ui/query-form.js','ui/renderer.js']) {
     fs.mkdirSync(path.dirname(path.join(staged,relative)),{recursive:true}); fs.copyFileSync(path.join(source,relative),path.join(staged,relative));
   }
   const payload = path.join(output,'payload'); fs.mkdirSync(path.join(payload,'resources/host'),{recursive:true});

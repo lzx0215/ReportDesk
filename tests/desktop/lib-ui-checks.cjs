@@ -35,5 +35,45 @@ const source=process.argv[2]||'D:/系统知识库/00_Inbox/yljhis/LIB/LIB';let a
  await p.fill('#report-search','');await p.waitForTimeout(650);assert.equal(await p.locator('.report-item').count(),1284);
  await p.screenshot({path:path.join(run,'all-reports.png')});assert.deepEqual(errors,[]);
  await app.close();app=null;
- fs.writeFileSync(path.join(run,'PASS.txt'),'PASS real Electron + actual LIB: full directory import, search-only sidebar, restored all reports, prescription, cross/tree parameters, ConditionUsing options, RegisterID label, original progress style; no demo/result fabrication. Oracle/option-result interaction NOT RUN.');console.log('PASS '+run);
+ app=await electron.launch(process.argv[3]?{executablePath:path.resolve(process.argv[3]),env}:{args:[path.join(root,'src/ReportDesk.Desktop')],env});
+ if(process.argv[3])await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().forEach(w=>w.hide()));
+ const reopened=await app.firstWindow();reopened.setDefaultTimeout(30000);
+ reopened.on('pageerror',e=>errors.push(e.message));
+ await reopened.waitForFunction(()=>document.querySelector('#operation-status').textContent==='准备就绪。'&&document.querySelectorAll('.report-item').length===1284);
+ // Isolate machine TNS discovery and inject UI-only login success. Actual Host
+ // success/failure persistence is covered by ReportDesk.Host.Checks without Oracle.
+ await app.evaluate(({ipcMain})=>{
+   const handler=ipcMain._invokeHandlers.get('reportdesk:call');ipcMain.removeHandler('reportdesk:call');
+   ipcMain.handle('reportdesk:call',async(event,method,args)=>{
+     if(method==='discoverTns')return {ok:true,data:[]};
+     if(method==='testConnection'){
+       const saved=await handler(event,'saveSettings',args);
+       return saved.ok?{ok:true,data:{version:'OFFLINE-INJECTED',settings:saved.data}}:saved;
+     }
+     return handler(event,method,args);
+   });
+ });
+ await reopened.click('#settings-open');await reopened.waitForFunction(()=>document.querySelector('#connection').open);
+ assert.equal(await reopened.locator('#conn-remember').isChecked(),true);
+ assert.equal(await reopened.locator('#test-connection').textContent(),'连接并保存');
+ await reopened.fill('#conn-name','Offline UI persistence');await reopened.fill('#conn-host','localhost');
+ await reopened.fill('#conn-service','offline');await reopened.fill('#conn-user','offline_reader');
+ await reopened.fill('#conn-password','SYNTHETIC_UI_PERSISTENCE');await reopened.click('#test-connection');
+ await reopened.waitForFunction(()=>document.querySelector('#test-status').textContent.includes('OFFLINE-INJECTED'));
+ assert.equal(await reopened.locator('#conn-password').inputValue(),'');
+ assert.equal(await reopened.locator('#conn-keep').isChecked(),true);
+ assert.equal(await reopened.locator('#conn-password').isDisabled(),true);
+ await reopened.click('[data-close="connection"]');
+ await reopened.screenshot({path:path.join(run,'restarted-restored-reports.png')});assert.deepEqual(errors,[]);
+ await app.close();app=null;
+ const dataDir=process.argv[3]?path.join(env.LOCALAPPDATA,'ReportDesk'):env.REPORTDESK_TEST_DATA;
+ assert.ok(!fs.readFileSync(path.join(dataDir,'connection.json'),'utf8').includes('SYNTHETIC_UI_PERSISTENCE'));
+ app=await electron.launch(process.argv[3]?{executablePath:path.resolve(process.argv[3]),env}:{args:[path.join(root,'src/ReportDesk.Desktop')],env});
+ if(process.argv[3])await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().forEach(w=>w.hide()));
+ const third=await app.firstWindow();
+ await third.waitForFunction(()=>document.querySelector('#operation-status').textContent==='准备就绪。'&&document.querySelectorAll('.report-item').length===1284);
+ const savedSettings=await third.evaluate(()=>window.reportDesk.call('settings'));
+ assert.equal(savedSettings.data.hasPassword,true);assert.equal(savedSettings.data.name,'Offline UI persistence');
+ await app.close();app=null;
+ fs.writeFileSync(path.join(run,'PASS.txt'),'PASS real Electron + actual LIB: full directory import, restart auto-restoration, search-only sidebar, prescription/cross/tree parameters, original progress style; UI-only injected login with atomic save, cleared password input and encrypted restart reuse. No fabricated report/result data. Oracle NOT RUN.');console.log('PASS '+run);
 })().catch(async e=>{console.error(e);if(app)await app.close();process.exitCode=1;});

@@ -6,8 +6,8 @@ using ReportDesk.Core;
 
 namespace ReportDesk.Host;
 
-// Desktop reports live only in the Service session. This file holds connection
-// preferences alone, and never SQL, report definitions, inputs, or results.
+// This file holds connection preferences alone. Import locations are stored
+// separately; SQL, report definitions, inputs and results are never written here.
 internal sealed class ConnectionSettingsStore
 {
     private readonly string file;

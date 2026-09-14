@@ -2,19 +2,19 @@
 
 适用于与此更新包基线一致的 Electron 0.2.0 x64 文件夹版。不是 WinForms 0.1.4 更新包，也不能用于其他 Electron 运行时。相同版本号不保证文件相同，更新脚本会检查实际文件 SHA256。
 
-本次 LIB 适配更新默认显示全部报表，列表仅保留搜索栏。保留 HIS 位置、关联文件检查、Excel 导出和原进度条。按提供的 HIS 引擎补充交叉统计、组合列/横向合计、行分组、多选编码绑定及前置条件数据源。1,284 张报表中 1,262 张无静态阻塞，22 张仍有配置或执行依赖问题；真实 Oracle 执行、数值结果及选项交互尚未在本机验证，不能据此声称所有 HIS 报表已可正确查询。
+本次更新增加 LIB/XML 导入路径记忆与连接成功自动保存。首次导入后，下次打开自动从原路径读取；「连接并保存」成功后自动保存数据库配置，默认加密保存密码，可取消勾选。保留全部报表加搜索栏、HIS 位置、关联文件检查、Excel 导出及原有适配规则。真实 Oracle 执行、数值结果及选项交互尚未在本机验证，不能据此声称所有 HIS 报表已可正确查询。
 
-`ReportDesk-0.2.0-lib-compatibility-20260911` 小包基于上一份 `ReportDesk-0.2.0-session-final-20260911` 已更新程序制作。脚本校验精确文件哈希；其他基线不能直接强制替换。完整原因见项目 `artifacts/audit/lib-compatibility-20260911/review.html`，验证范围见 `docs/Verification-LibCompatibility-20260911.md`。
+`ReportDesk-0.2.0-persistence-20260914` 基于构建时指定的原客户端包制作；确切基线以随包 `manifest.json` 的文件哈希为准，其他基线不能直接强制替换。当前验证范围见项目 `docs/Verification-Persistence-20260914.md`。
 
-每次打开后选择 HIS / LIB 目录或 XML，程序只把报表定义读入本次会话。左侧 ↻ 从原 XML 刷新当前清单，关闭后不保留清单。“普通门诊处方记录”和“门诊处方患者明细”保留已有表格适配；后者 dtALL 明细需要处方号和唯一号。数据不复刻打印版式公式。
+旧版本没有保存来源，所以升级后需要导入一次 HIS / LIB 目录或 XML，此后自动恢复。`import-sources.json` 只记住路径和类型，原 LIB/XML 必须仍可访问；路径失效会提示并保留记录，恢复路径后重启即可。左侧 ↻ 从原 XML 刷新当前清单，不保存查询参数或结果。“普通门诊处方记录”和“门诊处方患者明细”保留已有表格适配；后者 dtALL 明细需要处方号和唯一号。数据不复刻打印版式公式。
 
-HIS 位置继续区分已确认入口、同名候选和停用菜单。连接设置单独保存到 `%LOCALAPPDATA%\ReportDesk\connection.json`；密码仍只在勾选保存后用 CurrentUser DPAPI 加密。升级兼容读取旧 catalog 的连接设置，不恢复其中报表，也不改写或删除旧 catalog。
+HIS 位置继续区分已确认入口、同名候选和停用菜单。连接成功后配置单独保存到 `%LOCALAPPDATA%\ReportDesk\connection.json`；密码仅在勾选保存时用 CurrentUser DPAPI 加密，默认勾选，取消选择会记住。连接失败、取消或保存失败不会覆盖原配置。「保存设置」仍可不连接直接保存。升级兼容读取旧 catalog 的连接设置，不恢复其中报表，也不改写或删除旧 catalog。
 
 ## 内网安装
 
 1. 将更新 ZIP 复制到内网，解压到一个单独文件夹。
 2. 关闭 ReportDesk，等后台退出。不要在正在查询或导出时替换文件。
-   更新脚本备份程序三个文件。旧 catalog 保留原样；如需整体保留个人连接设置，可另备份 `%LOCALAPPDATA%\ReportDesk\connection.json`（如果存在）。
+   更新脚本备份程序三个文件。旧 catalog 保留原样；如需整体保留个人设置，可另备份 `%LOCALAPPDATA%\ReportDesk` 中的 `connection.json` 和 `import-sources.json`（如果存在）。
 3. 在解压后的更新文件夹打开 PowerShell，执行下面命令。把 `D:\ReportDesk` 替换为**含 ReportDesk.exe 和 resources 的程序目录**，不是 HIS 目录：
 
 ```powershell

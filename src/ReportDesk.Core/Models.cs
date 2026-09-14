@@ -86,6 +86,8 @@ public sealed class ConnectionSettings
     public string Service { get; set; } = "";
     public string Username { get; set; } = "";
     public string ProtectedPassword { get; set; } = "";
+    // Optional preference: older files have no value; Electron defaults to saving.
+    public bool? RememberPassword { get; set; }
     // Legacy serialized fields only. Ignored since 0.1.3; retained for catalog compatibility.
     public int TimeoutSeconds { get; set; }
     public int MaxRows { get; set; }

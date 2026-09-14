@@ -2,7 +2,7 @@
 
 目标环境：Windows 10 / Windows 11 x64，安装 .NET Framework 4.8。Win7、Win8、32 位系统和网页版不在本轮实现范围。旧 WinForms 源码及构建入口保留用于回归验证；新界面在 `src/ReportDesk.Desktop`，不再用 WinForms 展示主界面。
 
-当前 Electron 使用会话报表清单：每次打开选择 HIS / LIB 目录或 XML，关闭后不恢复报表；无收藏、最近、分类和说明编辑。Host 仅在保存连接设置时写 `connection.json`，旧 catalog 只兼容读取连接设置并保持原样。WinForms 基线的 CatalogStore API 保留，不代表当前 Electron 仍保存报表库。验收见 `tests/desktop/session-checks.cjs`。
+当前 Electron 首次导入后将目录/XML 路径写入 `import-sources.json`，后续启动自动从原路径读取报表。无收藏、最近、分类和说明编辑；报表定义、查询参数和结果不落盘。连接成功后自动保存 `connection.json`，默认加密保存密码，可取消勾选；旧 catalog 只兼容读取连接设置并保持原样。验收见 [持久化验证](Verification-Persistence-20260914.md)。
 
 ## 使用与构建
 
@@ -39,9 +39,10 @@ npm start
 
 ## 数据、安全与配置
 
-- Electron 不保存报表清单。`%LOCALAPPDATA%/ReportDesk/connection.json` 仅保存用户明确保存的连接设置；首次无此文件时只从旧 catalog 读取连接设置，旧文件原样保留。关闭后须重新选择 XML 来源。
+- `%LOCALAPPDATA%/ReportDesk/import-sources.json` 仅保存成功导入的目录/XML 路径及类型，支持多来源与重复导入去重；启动自动读取，仍按显示清单过滤。来源不可访问时提示并保留路径，恢复访问后重启重试；配置损坏时提示并保留原文件，不自动覆盖。原 XML 必须仍可访问，不缓存报表定义。
+- `%LOCALAPPDATA%/ReportDesk/connection.json` 保存连接配置；「连接并保存」测试登录成功后自动保存，「保存设置」仍可仅保存而不连接。失败或取消测试不覆盖旧配置；保存失败明确提示。首次无此文件时只从旧 catalog 读取连接设置，旧文件原样保留。
 - `report-visibility.xml` 在用户启动的 `ReportDesk.exe` 同目录，启动时读取。开发模式在仓库根目录读取。缺文件显示全部、selected 空清单显示零张、错误配置停止启动。所有列表与后台报表操作按 ID 验证清单；不增加岗位编辑入口。它仍是显示偏好，不是授权。
-- 密码不回传渲染器；连接窗口可保留后台当前密码，或明确填写替换。只有勾选保存密码才用原 CurrentUser DPAPI 存储。连接测试使用未保存的当前输入，不自动保存。
+- 密码不回传渲染器；连接窗口可使用后台已保存/当前会话密码，或取消「使用已保存或当前会话的密码」后填写替换。「保存密码」默认勾选，以 CurrentUser DPAPI 加密；取消勾选后密码只在本次会话使用，取消选择也会保存。旧连接文件缺少可选 `RememberPassword` 字段时默认勾选，但只在用户点击连接/保存后写入。换 Windows 用户/机器或无法解密时提示重新输入。
 - HTML/CSS/JS 全部随程序发布，不加载远程资源。渲染进程沙箱、contextIsolation、禁用 Node 集成、严格 CSP、禁用额外窗口/导航/权限。Electron 主进程核对 IPC 发起窗口、frame 和来源。
 - .NET 是当前用户的隐藏子进程，通过私有标准输入/输出通信，不开 HTTP 端口。查询只能按已导入报表与数据源标识执行，前端没有通用 SQL 执行入口。
 - 查询结果、参数、密码不进入 localStorage、浏览器持久会话或临时结果文件。Electron 使用非持久会话；UI 运行目录在用户目录下，不存业务结果。用户明确导出的 Excel 除外。

@@ -1,6 +1,6 @@
 # ReportDesk · 报表管理
 
-当前 Electron 0.2.0 使用会话模式：直接读取所选 HIS / LIB XML，不保存报表清单，无收藏、最近、分类和说明编辑；连接设置单独保存，旧 catalog 保留原样。详见 [本轮结果与验证](docs/Session-Workflow-20260911.md)。下文涉及 catalog、收藏及分类的操作属于保留的 WinForms 0.1.4 基线。
+当前 Electron 0.2.0 首次导入 HIS / LIB 目录或 XML 后自动记住来源路径，后续启动自动读取；点击「连接并保存」成功后自动保存配置，默认以当前 Windows 用户 DPAPI 加密保存密码，可取消勾选。无收藏、最近、分类和说明编辑；不保存查询参数或结果，旧 catalog 保留原样。详见 [持久化行为与验证](docs/Verification-Persistence-20260914.md)。下文涉及 catalog、收藏及分类的操作属于保留的 WinForms 0.1.4 基线。
 
 本次 HIS 导出资料已用于实际适配：纯结果映射、静态下拉选项、复选框及常见字典恢复表格查询；菜单分类区分确认与候选。结果、剩余限制和补导出 SQL 见 [HIS-Adaptation-20260911](docs/HIS-Adaptation-20260911.md)。
 

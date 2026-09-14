@@ -85,6 +85,10 @@ internal static class Program
 internal sealed class Service : IDisposable
 {
     private readonly ConnectionSettingsStore store;
+    private readonly ImportSourcesStore sourcesStore;
+    private readonly Func<ConnectionSettings, string, string> testConnection;
+    private bool sourcesRestored;
+    private readonly List<string> startupWarnings = new();
     private readonly ReportVisibility visibility;
     private readonly ReportLocations locations;
     private readonly bool offline;
@@ -96,14 +100,16 @@ internal sealed class Service : IDisposable
     private DataTable? lookup;
     private string resultId = "", lookupId = "", context = "";
     private int revision;
-    public Service(string? data, string config, bool offline)
+    public Service(string? data, string config, bool offline, Func<ConnectionSettings, string, string>? testConnection = null)
     {
         configDirectory = Path.GetFullPath(config); this.offline = offline;
+        this.testConnection = testConnection ?? OracleQueryService.TestConnection;
+        sourcesStore = new ImportSourcesStore(data);
         visibility = ReportVisibility.Load(Path.Combine(configDirectory, ReportVisibility.FileName));
         locations = ReportLocations.Load(Path.Combine(configDirectory, ReportLocations.FileName));
         store = new ConnectionSettingsStore(data); catalog = new Catalog { Connection = store.Load() };
         try { password = CatalogStore.Unprotect(catalog.Connection.ProtectedPassword); }
-        catch (Exception ex) { ErrorLog.Write("DecryptPassword", ex, includeMessage: false); }
+        catch (Exception ex) { ErrorLog.Write("DecryptPassword", ex, includeMessage: false); startupWarnings.Add("已保存的密码无法解密，请在连接设置中重新输入密码并连接保存。"); }
     }
     public static string Text(Dictionary<string, object> a, string key, string fallback = "") => a.TryGetValue(key, out var v) && v != null ? Convert.ToString(v, CultureInfo.InvariantCulture) ?? fallback : fallback;
     public static int Number(Dictionary<string, object> a, string key, int fallback = 0) => a.TryGetValue(key, out var v) ? Convert.ToInt32(v, CultureInfo.InvariantCulture) : fallback;
@@ -124,7 +130,7 @@ internal sealed class Service : IDisposable
         return r.Queries[index];
     }
     private object List() => Visible().Select(r => new { id = r.Id, name = r.Name, aliases = r.Aliases, notes = r.Notes, path = r.SourcePath, locations = locations.For(r), status = r.Status, demo = r.IsDemo, issues = r.Issues, verified = r.Verified }).ToArray();
-    private object Settings() => new { name = catalog.Connection.Name, mode = (int)catalog.Connection.Mode, host = catalog.Connection.Host, port = catalog.Connection.Port, service = catalog.Connection.Service, username = catalog.Connection.Username, tnsFile = catalog.Connection.TnsFile, tnsAlias = catalog.Connection.TnsAlias, remember = catalog.Connection.ProtectedPassword.Length > 0, hasPassword = password.Length > 0 };
+    private object Settings() => new { name = catalog.Connection.Name, mode = (int)catalog.Connection.Mode, host = catalog.Connection.Host, port = catalog.Connection.Port, service = catalog.Connection.Service, username = catalog.Connection.Username, tnsFile = catalog.Connection.TnsFile, tnsAlias = catalog.Connection.TnsAlias, remember = catalog.Connection.RememberPassword ?? true, hasPassword = password.Length > 0 };
     private void Clear() { result?.Table.Dispose(); result = null; resultId = ""; lookup?.Dispose(); lookup = null; lookupId = ""; revision++; }
     private object Details(Dictionary<string, object> a)
     {
@@ -257,11 +263,63 @@ internal sealed class Service : IDisposable
         return result.Table;
     }
     private ConnectionSettings ReadSettings(Dictionary<string, object> a) => new() { Name = Text(a, "name"), Mode = (ConnectionMode)Number(a, "mode"), Host = Text(a, "host"), Port = Number(a, "port", 1521), Service = Text(a, "service"), Username = Text(a, "username"), TnsFile = Text(a, "tnsFile"), TnsAlias = Text(a, "tnsAlias") };
+    private void MergeImport(ImportSummary summary)
+    {
+        ReportImporter.Merge(catalog, summary);
+        foreach (var report in summary.Reports)
+            if (summary.Inventory != null) importRoots[report.Id] = summary.Inventory.Root;
+    }
+    private void RestoreSources(CancellationToken token, Action<string> progress)
+    {
+        if (sourcesRestored) return;
+        List<ImportSource> sources;
+        try { sources = sourcesStore.Load(); }
+        catch (Exception ex)
+        {
+            ErrorLog.Write("ReadImportSources", ex, includeMessage: false);
+            startupWarnings.Add("无法读取已保存的导入路径，请检查本地 import-sources.json；原配置已保留。");
+            sourcesRestored = true; return;
+        }
+        var restored = new List<ImportSummary>();
+        var warnings = new List<string>();
+        foreach (var source in sources)
+        {
+            token.ThrowIfCancellationRequested();
+            progress("正在自动读取已保存的 HIS / LIB 来源…");
+            try
+            {
+                var summary = source.Folder ? ReportImporter.ImportFolder(source.Path, token, progress) : ReportImporter.ImportWithRelated(source.Path, token, progress);
+                restored.Add(summary);
+                if (summary.Errors.Count > 0) warnings.Add(source.Path + "：\n" + string.Join("\n", summary.Errors));
+                if (summary.Reports.Count == 0) warnings.Add(source.Path + "：未读取到可独立查询的报表，请检查来源文件。");
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is System.Security.SecurityException || ex is InvalidOperationException || ex is ArgumentException)
+            {
+                ErrorLog.Write("RestoreImportSource", ex, includeMessage: false);
+                warnings.Add(source.Path + "：无法自动读取，请确认目录/文件仍可访问；路径已保留，恢复后重启即可重试。");
+            }
+        }
+        token.ThrowIfCancellationRequested();
+        foreach (var summary in restored) MergeImport(summary);
+        startupWarnings.AddRange(warnings);
+        sourcesRestored = true;
+    }
+    private object SaveSettings(ConnectionSettings settings, string nextPassword, bool remember)
+    {
+        settings.RememberPassword = remember;
+        settings.ProtectedPassword = remember && nextPassword.Length > 0 ? CatalogStore.Protect(nextPassword) : "";
+        store.Save(settings);
+        catalog.Connection = settings; password = nextPassword; Clear();
+        return Settings();
+    }
     public object Handle(string method, Dictionary<string, object> a, CancellationToken token, Action<string> progress)
     {
         switch (method)
         {
-            case "bootstrap": return new { reports = List(), settings = Settings(), demoVisible = visibility.Includes(DemoData.Report()), offline };
+            case "bootstrap":
+                RestoreSources(token, progress);
+                return new { reports = List(), settings = Settings(), demoVisible = visibility.Includes(DemoData.Report()), offline, warnings = startupWarnings.ToArray() };
             case "list": return List();
             case "select": Clear(); return Details(a);
             case "demo":
@@ -289,8 +347,9 @@ internal sealed class Service : IDisposable
                 progress("正在导入报表定义…"); ImportSummary summary;
                 if (Flag(a, "folder")) summary = ReportImporter.ImportFolder(Text(a, "path"), token, progress);
                 else summary = ReportImporter.ImportWithRelated(Text(a, "path"), token, progress);
-                token.ThrowIfCancellationRequested(); ReportImporter.Merge(catalog, summary);
-                foreach (var importedReport in summary.Reports) if (summary.Inventory != null) importRoots[importedReport.Id] = summary.Inventory.Root;
+                token.ThrowIfCancellationRequested();
+                if (summary.Reports.Count > 0) sourcesStore.Remember(Text(a, "path"), Flag(a, "folder"));
+                MergeImport(summary);
                 var links = summary.RelatedFiles.Values.SelectMany(x => x).ToList();
                 Clear(); return new { reports = List(), imported = summary.Reports.Count, pending = summary.Reports.Count(r => r.Issues.Count > 0), skipped = summary.Skipped, errors = summary.Errors,
                     incomplete = summary.IncompleteReports.Select(r => r.SourcePath).ToArray(),
@@ -343,14 +402,21 @@ internal sealed class Service : IDisposable
             case "saveSettings":
                 var settings = ReadSettings(a); var nextPassword = Flag(a, "keepPassword") ? password : Text(a, "password");
                 OracleQueryService.ConnectionString(settings, nextPassword);
-                settings.ProtectedPassword = Flag(a, "remember") ? CatalogStore.Protect(nextPassword) : "";
-                var previous = catalog.Connection; catalog.Connection = settings;
-                try { store.Save(settings); } catch { catalog.Connection = previous; throw; }
-                password = nextPassword; Clear(); return Settings();
+                return SaveSettings(settings, nextPassword, Flag(a, "remember"));
             case "testConnection":
                 if (offline) throw new InvalidOperationException("离线验证模式禁止真实数据库连接。");
                 progress("正在测试连接；握手等待由网络与 TNS 决定…");
-                var version = OracleQueryService.TestConnection(ReadSettings(a), Flag(a, "keepPassword") ? password : Text(a, "password")); token.ThrowIfCancellationRequested(); return new { version };
+                var testedSettings = ReadSettings(a); var testedPassword = Flag(a, "keepPassword") ? password : Text(a, "password");
+                var version = testConnection(testedSettings, testedPassword);
+                token.ThrowIfCancellationRequested();
+                object savedSettings;
+                try { savedSettings = SaveSettings(testedSettings, testedPassword, !a.ContainsKey("remember") || Flag(a, "remember")); }
+                catch (Exception ex)
+                {
+                    ErrorLog.Write("SaveConnectedSettings", ex, includeMessage: false);
+                    throw new InvalidOperationException("连接成功，但配置保存失败；原配置已保留，请检查本地配置目录的写入权限后重试。");
+                }
+                return new { version, settings = savedSettings };
             case "discoverTns":
                 if (offline) return Array.Empty<string>();
                 return TnsDiscovery.Discover().Concat(TnsDiscovery.FindFiles(new[] { configDirectory, Path.Combine(configDirectory, "network", "admin") })).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();

@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><PlatformTarget>x64</PlatformTarget><StartupObject>PersistenceChecks</StartupObject></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/ReportDesk.Core/ReportDesk.Core.csproj" />
+    <Reference Include="System.Web.Extensions" />
+    <Compile Include="../../src/ReportDesk.Host/*.cs" Link="Host/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

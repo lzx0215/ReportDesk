@@ -305,6 +305,40 @@ internal sealed class Service : IDisposable
         startupWarnings.AddRange(warnings);
         sourcesRestored = true;
     }
+    private object CheckNewReports(CancellationToken token, Action<string> progress)
+    {
+        var sources = sourcesStore.Load();
+        if (sources.Count == 0) throw new InvalidOperationException("尚未保存导入来源，请先导入报表目录或 XML；自动发现目录中的新文件需先导入该目录。");
+        var known = new HashSet<string>(catalog.Reports.Select(r => r.Id), StringComparer.OrdinalIgnoreCase);
+        var additions = new List<ImportSummary>();
+        var errors = new List<string>();
+        var incomplete = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var source in sources)
+        {
+            token.ThrowIfCancellationRequested();
+            progress("正在检查新增报表：" + source.Path);
+            try
+            {
+                var summary = source.Folder ? ReportImporter.ImportFolder(source.Path, token, progress) : ReportImporter.ImportWithRelated(source.Path, token, progress);
+                errors.AddRange(summary.Errors);
+                foreach (var report in summary.IncompleteReports) incomplete.Add(report.SourcePath);
+                // Stage additions until all sources finish; cancellation must not partially update the catalog.
+                summary.Reports.RemoveAll(r => !ReportClassification.IsStandalone(r) || !known.Add(r.Id));
+                additions.Add(summary);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is System.Security.SecurityException || ex is System.Xml.XmlException || ex is InvalidOperationException || ex is ArgumentException)
+            {
+                ErrorLog.Write("CheckNewReports", ex, includeMessage: false);
+                errors.Add(source.Path + "：无法检查，请确认来源仍可访问；已导入报表和来源路径已保留。");
+            }
+        }
+        token.ThrowIfCancellationRequested();
+        foreach (var summary in additions) MergeImport(summary);
+        var added = additions.SelectMany(s => s.Reports).ToList();
+        return new { reports = List(), addedCount = added.Count, visibleAddedCount = added.Count(visibility.Includes),
+            sourceCount = sources.Count, incomplete = incomplete.Count, errors };
+    }
     private object SaveSettings(ConnectionSettings settings, string nextPassword, bool remember)
     {
         settings.RememberPassword = remember;
@@ -336,6 +370,7 @@ internal sealed class Service : IDisposable
                 var inventory = ReportFileDiscovery.Scan(relatedRoot, token, progress);
                 return new { root = inventory.Root, query = relatedReport.SourcePath,
                     files = ReportFileDiscovery.Match(relatedReport.SourcePath, inventory, token), warnings = inventory.Warnings };
+            case "checkNewReports": return CheckNewReports(token, progress);
             case "recheck":
                 var checkedReports = ReportImporter.Recheck(Visible().ToList(), token, progress);
                 token.ThrowIfCancellationRequested();

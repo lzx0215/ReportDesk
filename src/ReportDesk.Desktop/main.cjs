@@ -52,7 +52,7 @@ function writeSafeLog(operation) {
   try { const date = new Date(); const directory = path.join(dataDirectory, 'logs'); fs.mkdirSync(directory, { recursive: true }); fs.appendFileSync(path.join(directory, `ReportDesk-${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}.log`), `${date.toISOString()} ERROR operation=${operation} version=${app.getVersion()} process=x64 message=[上下文已省略]\n`); return ''; }
   catch { return '本地错误日志写入失败。'; }
 }
-const allowed = new Set(['bootstrap','list','select','demo','definition','relatedFiles','recheck','query','view','page','lookup','lookupPage','lookupAll','settings','saveSettings','testConnection','discoverTns','clear']);
+const allowed = new Set(['bootstrap','list','select','demo','definition','relatedFiles','recheck','checkNewReports','query','view','page','lookup','lookupPage','lookupAll','settings','saveSettings','testConnection','discoverTns','clear']);
 ipcMain.handle('reportdesk:call', async (event, method, args = {}) => {
   if (event.sender !== window?.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== ui) return { ok: false, message: '非法调用来源。' };
   if (method === 'cancel') { await bridge.cancel(); return { ok: true, data: {} }; }

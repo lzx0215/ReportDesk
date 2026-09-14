@@ -23,7 +23,7 @@ let desktop;
  const exported=path.join(dir,'ui-export.xlsx');
  await desktop.evaluate(({dialog},file)=>{dialog.showSaveDialog=async()=>({canceled:false,filePath:file});},exported);
  await page.click('#export');await page.waitForFunction(()=>!document.querySelector('#query').disabled);assert.ok(fs.existsSync(exported));
- await page.click('#collapse');assert.equal(await page.locator('#conditions').isVisible(),false);await page.click('#toggle-conditions');
+ await page.click('#summary-edit');assert.equal(await page.locator('#query-conditions-view').isVisible(),true);await page.click('#conditions-back');
  assert.equal(await page.locator('#favorites,#recent,#star,#category,#metadata-form').count(),0);
  await page.click('#metadata-open');assert.ok(await page.locator('#meta-guidance').isVisible());await page.click('[data-close=metadata]');
  await page.click('#settings-open');await page.waitForFunction(()=>document.querySelector('#connection').open&&!document.querySelector('#conn-name').disabled);

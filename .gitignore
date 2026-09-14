@@ -1,6 +1,8 @@
 **/bin/
 **/obj/
 artifacts/
+output/playwright/
+output/
 **/node_modules/
 .vs/
 *.user

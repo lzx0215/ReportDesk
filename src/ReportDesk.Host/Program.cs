@@ -82,7 +82,7 @@ internal static class Program
     }
 }
 
-internal sealed class Service : IDisposable
+internal sealed partial class Service : IDisposable
 {
     private readonly ConnectionSettingsStore store;
     private readonly ImportSourcesStore sourcesStore;
@@ -123,6 +123,7 @@ internal sealed class Service : IDisposable
     private ReportDefinition Report(Dictionary<string, object> a) => Visible().FirstOrDefault(r => r.Id == Text(a, "reportId")) ?? throw new InvalidOperationException("报表不存在或不在显示清单内。");
     private QueryDefinition Query(ReportDefinition r, Dictionary<string, object> a)
     {
+        if (reloadRequired.Contains(r.Id)) throw new InvalidOperationException(ReloadRequiredMessage);
         int index = Number(a, "source");
         if (index < 0 || index >= r.Queries.Count) throw new InvalidOperationException("请选择有效的数据源。");
         if(r.Queries[index].Kind=="ConditionUsing") throw new InvalidOperationException("该数据源用于加载查询条件，请选择主表或明细。");
@@ -138,7 +139,8 @@ internal sealed class Service : IDisposable
         if (index < 0 || index >= r.Queries.Count) index = 0;
         if(r.Queries.Count>0 && r.Queries[index].Kind=="ConditionUsing") index=Math.Max(0,r.Queries.FindIndex(q=>q.Kind!="ConditionUsing"));
         var needed = new List<string>();
-        var selectedIssues = r.Queries.Count > 0 ? ReportReadiness.IssuesFor(r, r.Queries[index]) : r.Issues;
+        var selectedIssues = reloadRequired.Contains(r.Id) ? new List<string> { ReloadRequiredMessage } :
+            r.Queries.Count > 0 ? ReportReadiness.IssuesFor(r, r.Queries[index]) : r.Issues;
         if (selectedIssues.Count == 0 && r.Queries.Count > 0)
         {
             needed = SqlTemplate.Compile(r.Queries[index].Sql).RequiredNames.Select(ReportImporter.ParameterName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -457,7 +459,7 @@ internal sealed class Service : IDisposable
                 return TnsDiscovery.Discover().Concat(TnsDiscovery.FindFiles(new[] { configDirectory, Path.Combine(configDirectory, "network", "admin") })).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             case "tnsAliases": return TnsNames.Read(Text(a, "path")).Keys.ToArray();
             case "clear": Clear(); return new { };
-            default: throw new InvalidOperationException("不支持的后台操作。");
+            default: return HandleSqlEditing(method, a, token, progress);
         }
     }
     public void Dispose() => Clear();

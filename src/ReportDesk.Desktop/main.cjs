@@ -3,6 +3,8 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { Bridge } = require('./bridge.cjs');
+const { SqlEditorMain } = require('./sql-editor-main.cjs');
+const sqlEditor = new SqlEditorMain(dialog);
 let window, bridge, closing = false, uiBusy = false;
 const testing = !app.isPackaged && process.env.REPORTDESK_TEST === '1';
 const dataDirectory = testing ? path.resolve(process.env.REPORTDESK_TEST_DATA) : path.join(process.env.LOCALAPPDATA, 'ReportDesk');
@@ -17,7 +19,7 @@ if (!lock) app.quit();
 else {
   app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
   app.whenReady().then(async () => {
-    const assets = new Set(['/index.html', '/styles.css', '/execution.css', '/query-form.js', '/renderer.js']);
+    const assets = new Set(['/index.html', '/styles.css', '/execution.css', '/query-form.js', '/renderer.js', '/sql-editor.js', '/sql-editor.css']);
     const ses = session.fromPartition('reportdesk');
     ses.protocol.handle('reportdesk', request => {
       const url = new URL(request.url);
@@ -41,6 +43,7 @@ else {
     window.on('close', e => {
       if (closing) return;
       if (uiBusy || bridge.active !== null) { e.preventDefault(); bridge.cancel().catch(() => {}); dialog.showMessageBox(window, { type: 'info', message: '已请求取消当前操作，请等待结束后关闭。连接握手可能仍需等待网络返回。' }); return; }
+      if (!sqlEditor.allowClose(window)) { e.preventDefault(); return; }
       closing = true; bridge.close();
     });
     window.webContents.on('render-process-gone', () => { writeSafeLog('RendererExit'); bridge.cancel().catch(() => {}); });
@@ -52,17 +55,19 @@ function writeSafeLog(operation) {
   try { const date = new Date(); const directory = path.join(dataDirectory, 'logs'); fs.mkdirSync(directory, { recursive: true }); fs.appendFileSync(path.join(directory, `ReportDesk-${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}.log`), `${date.toISOString()} ERROR operation=${operation} version=${app.getVersion()} process=x64 message=[上下文已省略]\n`); return ''; }
   catch { return '本地错误日志写入失败。'; }
 }
-const allowed = new Set(['bootstrap','list','select','demo','definition','relatedFiles','recheck','checkNewReports','query','view','page','lookup','lookupPage','lookupAll','settings','saveSettings','testConnection','discoverTns','clear']);
+const allowed = new Set(['bootstrap','list','select','demo','definition','relatedFiles','recheck','checkNewReports','query','view','page','lookup','lookupPage','lookupAll','settings','saveSettings','testConnection','discoverTns','clear','sqlEditorCheck','reloadReport']);
 ipcMain.handle('reportdesk:call', async (event, method, args = {}) => {
   if (event.sender !== window?.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== ui) return { ok: false, message: '非法调用来源。' };
   if (method === 'cancel') { await bridge.cancel(); return { ok: true, data: {} }; }
   if (method === 'logClient') { const notice = writeSafeLog('RendererError'); return { ok: true, data: { notice } }; }
+  if (method === 'sqlEditorDirty') return sqlEditor.setDirty(args);
   if (uiBusy) return { ok: false, message: '正在处理另一项操作。' };
   uiBusy = true;
   try {
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('参数格式无效。');
     let data;
-    if (method === 'import') {
+    if (['sqlEditorOpen', 'sqlEditorSave', 'sqlEditorDiscard'].includes(method)) data = await sqlEditor.handle(method, args, window, bridge);
+    else if (method === 'import') {
       const choice = await dialog.showOpenDialog(window, { title: args.folder ? '选择报表根目录或报表目录（自动识别并匹配 XML）' : '导入报表查询 XML', properties: args.folder ? ['openDirectory'] : ['openFile'], filters: [{ name: '报表 XML', extensions: ['xml'] }] });
       data = choice.canceled ? null : await bridge.call('import', { folder: !!args.folder, path: choice.filePaths[0] });
     } else if (method === 'export') {

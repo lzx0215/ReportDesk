@@ -127,6 +127,7 @@ internal static class SqlEditingChecks
                 var file = Create(); var directory = Path.GetDirectoryName(file)!;
                 var other = Path.Combine(directory, "other.xml"); File.WriteAllText(other, Body);
                 var id = ReportImporter.ImportFile(file)!.Id; var otherId = ReportImporter.ImportFile(other)!.Id;
+                Directory.CreateDirectory(Path.Combine(Root, "config"));
                 using var service = new Service(Path.Combine(Root, "data"), Path.Combine(Root, "config"), true);
                 Call(service, "import", Args("path", directory, "folder", true));
                 var editor = Call(service, "sqlEditorOpen", Args("reportId", id));

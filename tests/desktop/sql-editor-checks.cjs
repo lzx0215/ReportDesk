@@ -17,14 +17,40 @@ function mainHarness() {
     showMessageBox: async (_window, options) => { prompts.push(options); return { response }; },
     showMessageBoxSync: (_window, options) => { prompts.push(options); return response; }
   };
-  const controller = new SqlEditorMain(dialog);
+  const revealed = [];
+  const files = { statSync: () => ({ isFile: () => true }) };
+  const controller = new SqlEditorMain(dialog, { showItemInFolder: file => revealed.push(file) }, files);
   const bridge = { call: async (method, args) => {
     calls.push({ method, args });
     if (method === 'sqlEditorOpen') return fixture();
-    return { saved: true, editor: { ...fixture(), token: 'saved' }, backupPath: 'source.bak' };
+    return { saved: true, editor: { ...fixture(), token: 'saved' }, savedPath: fixture().path };
   } };
-  return { controller, bridge, calls, prompts, choose: value => { response = value; } };
+  return { controller, bridge, calls, prompts, revealed, files, choose: value => { response = value; } };
 }
+
+test('reveal uses the Host source, ignores injected paths and preserves a dirty draft', async () => {
+  const h = mainHarness(); await h.controller.handle('sqlEditorOpen', { reportId: 'report' }, {}, h.bridge);
+  h.controller.setDirty({ dirty: true });
+  await h.controller.handle('sqlEditorReveal', { reportId: 'report', token: 'opened', path: 'C:\\unrelated.xml' }, {}, h.bridge);
+  assert.deepEqual(h.revealed, [fixture().path]);
+  assert.equal(h.controller.dirty, true); assert.equal(h.calls.length, 1); assert.equal(h.prompts.length, 0);
+});
+
+test('reveal rejects stale sessions, demos, missing files and directories', async () => {
+  const h = mainHarness(); const args = { reportId: 'report', token: 'opened' };
+  await assert.rejects(h.controller.handle('sqlEditorReveal', args, {}, h.bridge));
+  await h.controller.handle('sqlEditorOpen', { reportId: 'report' }, {}, h.bridge);
+  for (const patch of [{ token: 'stale' }, { reportId: 'another' }])
+    await assert.rejects(h.controller.handle('sqlEditorReveal', { ...args, ...patch }, {}, h.bridge));
+  h.controller.target.demo = true;
+  await assert.rejects(h.controller.handle('sqlEditorReveal', args, {}, h.bridge));
+  h.controller.target.demo = false;
+  h.files.statSync = () => ({ isFile: () => false });
+  await assert.rejects(h.controller.handle('sqlEditorReveal', args, {}, h.bridge), /不可访问/);
+  h.files.statSync = () => { throw new Error('missing'); };
+  await assert.rejects(h.controller.handle('sqlEditorReveal', args, {}, h.bridge), /不可访问/);
+  assert.deepEqual(h.revealed, []);
+});
 test('opening reads a server-selected source, never a client file path', async () => {
   const h = mainHarness();
   await h.controller.handle('sqlEditorOpen', { reportId: 'report', path: 'C:\\other.xml' }, {}, h.bridge);
@@ -41,6 +67,7 @@ test('save prompt uses the Host path; approved payload contains no client path',
   h.controller.setDirty({ dirty: true });
   await h.controller.handle('sqlEditorSave', { reportId: 'report', token: 'opened', sourceIndex: 2, sql: 'select 4 from dual', path: 'FAKE' }, {}, h.bridge);
   assert.match(h.prompts[0].detail, /C:\\reports\\query.xml/); assert.ok(!h.prompts[0].detail.includes('FAKE'));
+  assert.match(h.prompts[0].message, /不生成备份/); assert.equal(h.prompts[0].buttons[1], '覆盖并保存');
   assert.equal(h.calls[1].args.sourceIndex, 2); assert.equal(h.calls[1].args.path, undefined);
   assert.equal(h.controller.dirty, false); assert.equal(h.controller.target.token, 'saved');
 });
@@ -95,7 +122,7 @@ function uiHarness() {
         if (h.saveError) throw new Error('原 XML 已被修改');
         if (h.saveCancel) return null;
         h.data.sources.find(s => s.index === args.sourceIndex).sql = args.sql; h.data.token = 'saved';
-        return { saved: true, reloaded: true, editor: structuredClone(h.data), backupPath: 'original.bak', message: '原 XML 已保存并重新加载' };
+        return { saved: true, reloaded: true, editor: structuredClone(h.data), savedPath: h.data.path, message: '原 XML 已保存并重新加载' };
       }
       if (method === 'sqlEditorCheck') return { passed: true, missing: [], message: '静态检查通过' };
       if (method === 'list') return [];
@@ -121,6 +148,17 @@ test('editor uses XML ordinal rather than imported query ordinal', async () => {
   assert.equal(h.nodes.get('sql-editor-source').value, '2'); assert.equal(h.nodes.get('sql-editor-input').value, 'select 2 from dual');
   assert.equal(h.nodes.get('sql-editor-save').disabled, true);
 });
+
+test('reveal from editor keeps text and dirty state without querying or saving', async () => {
+  const h = uiHarness(); await h.open(); await h.edit('select 99 from dual');
+  await h.nodes.get('sql-editor-reveal').onclick();
+  assert.equal(h.nodes.get('sql-editor-input').value, 'select 99 from dual');
+  assert.equal(h.nodes.get('sql-editor-save').disabled, false);
+  const request = h.calls.find(c => c.method === 'sqlEditorReveal');
+  assert.equal(request.args.reportId, 'report'); assert.equal(request.args.token, 'opened'); assert.equal(request.args.path, undefined);
+  assert.ok(!h.calls.some(c => ['query', 'sqlEditorSave', 'reloadReport'].includes(c.method)));
+  assert.equal(h.clears, 0);
+});
 test('copy includes current draft only, without report headings or parameter substitution', async () => {
   const h = uiHarness(); await h.open(); const sql = "select '&科室' as NAME\nfrom dual"; await h.edit(sql);
   await h.nodes.get('sql-editor-copy').onclick();
@@ -140,7 +178,8 @@ test('save clears old result, refreshes one report and never executes query', as
   const h = uiHarness(); await h.open(); await h.edit('select 8 from dual'); await h.nodes.get('sql-editor-save').onclick();
   assert.equal(h.calls.find(c => c.method === 'sqlEditorSave').args.sourceIndex, 2);
   assert.equal(h.clears, 1); assert.deepEqual(h.refreshes, [{ id: 'report', source: 1 }]);
-  assert.equal(h.nodes.get('sql-editor-save').disabled, true); assert.match(h.nodes.get('sql-editor-status').textContent, /original.bak/);
+  assert.equal(h.nodes.get('sql-editor-save').disabled, true); assert.ok(h.nodes.get('sql-editor-status').textContent.includes(h.data.path));
+  assert.ok(!h.nodes.get('sql-editor-status').textContent.includes('.bak'));
   assert.ok(!h.calls.some(c => ['query', 'testConnection', 'import', 'recheck'].includes(c.method)));
 });
 test('failed or cancelled save preserves draft and old baseline', async () => {

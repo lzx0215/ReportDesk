@@ -91,8 +91,14 @@ internal sealed partial class Service
                 case "sqlEditorSave":
                     var file = EditorFile(a);
                     var report = Report(a);
-                    progress("正在备份并保存当前 SQL，未执行数据库查询…");
-                    var saved = SqlXmlEditor.Save(file, Number(a, "sourceIndex", -1), Text(a, "sql"), token);
+                    progress("正在覆盖原 XML 中的当前 SQL，未执行数据库查询…");
+                    SqlXmlSaveResult saved;
+                    try { saved = SqlXmlEditor.Save(file, Number(a, "sourceIndex", -1), Text(a, "sql"), token); }
+                    catch (SqlXmlVerificationException)
+                    {
+                        reloadRequired.Add(report.Id); Clear();
+                        throw;
+                    }
                     sqlEditorFile = saved.Snapshot; sqlEditorToken = Guid.NewGuid().ToString("N");
                     // After file replacement, cancellation or reload failure must not masquerade as a failed save.
                     bool reloaded = false;
@@ -101,14 +107,14 @@ internal sealed partial class Service
                     {
                         report = ReloadSingle(report, CancellationToken.None, saved.Snapshot.Hash);
                         reloaded = true;
-                        message = saved.Changed ? "原 XML 已保存并重新加载；未执行 SQL，请核对条件后手动查询。" : "SQL 未变化，已重新加载当前报表。";
+                        message = saved.Changed ? "原 XML 已保存，磁盘内容已回读核对，并重新加载；未执行 SQL，请核对条件后手动查询。" : "SQL 与磁盘文件一致，无需写入；已重新加载当前报表。";
                     }
                     catch (Exception ex)
                     {
                         ErrorLog.Write("ReloadSavedReport", ex, includeMessage: false);
                         message = "原 XML 已保存，但重新加载失败。已禁止执行旧定义；请修复来源后点击重新加载。";
                     }
-                    return new { saved = true, changed = saved.Changed, reloaded, backupPath = saved.BackupPath,
+                    return new { saved = true, changed = saved.Changed, reloaded, savedPath = saved.Snapshot.Path,
                         message, editor = EditorData(report, saved.Snapshot) };
                 case "reloadReport":
                     var previous = Report(a);
@@ -126,7 +132,7 @@ internal sealed partial class Service
         catch (Exception ex)
         {
             ErrorLog.Write("SqlXmlEditing", ex, includeMessage: false);
-            throw new InvalidOperationException("XML 操作未完成。请检查文件、编码、占用状态及目录写入权限；保留草稿，并核对原文件和备份后重试。");
+            throw new InvalidOperationException("XML 操作未完成。请检查文件、编码、占用状态及目录写入权限；保留草稿，并核对原文件后重试。");
         }
     }
 }

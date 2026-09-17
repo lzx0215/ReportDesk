@@ -4,6 +4,8 @@
 
 报表内容分类、无 SQL 定义单列和外部位置配置见 [ReportLocations](docs/ReportLocations.md)。
 
+本机测试使用 `E:\his\LIB` 和本机 Oracle ORCL。SQL 保存测试使用隔离副本，凭据仅在内存读取；命令与验证边界见 [本机测试说明](docs/LocalTesting.md)。
+
 **Electron 桌面开发版**：已新增 Windows 10/11 x64 界面，采用统一浅色底面、暖灰与香槟金点缀，保留原有圆角进度条风格，左侧报表直接切换查询区、横排条件、执行进度与取消。构建、使用和验收边界见 [Desktop.md](docs/Desktop.md)。下文记录的是保留用于回归的 WinForms 0.1.4；Electron 版不再以 x86/旧系统为本轮目标。
 
 第一版 Windows 桌面程序：导入 HIS 查询设置 XML，按名称/别名/说明/来源搜索，分类、收藏、最近使用，生成条件表单，执行 Oracle 查询，以统一表格展示并导出 `.xlsx`。不依赖 FS/FarPoint，不复刻原报表打印版式。

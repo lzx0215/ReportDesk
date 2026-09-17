@@ -3,7 +3,7 @@
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '../..');
 const { _electron: electron } = require(path.join(root, 'src/ReportDesk.Desktop/node_modules/playwright'));
-const source = 'D:/系统知识库/00_Inbox/yljhis/LIB/LIB';
+const source = path.resolve(process.env.REPORTDESK_LIB || 'E:/his/LIB');
 const run = path.join(root, 'artifacts/verification/desktop', 'lib-query-modal-' + Date.now());
 const executable = process.argv[2];
 const baseline = process.argv[3];

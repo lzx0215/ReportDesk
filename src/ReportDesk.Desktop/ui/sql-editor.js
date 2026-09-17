@@ -14,23 +14,24 @@
   dialog.setAttribute('aria-labelledby', 'sql-editor-title');
   const heading = make('h2', 'sql-editor-title', 'SQL 编辑');
   const filePath = make('p', 'sql-editor-path', '', 'sql-editor-path');
-  const sourceLabel = make('label', '', '数据源');
   const sourceSelect = make('select', 'sql-editor-source');
-  sourceSelect.setAttribute('aria-label', 'SQL 数据源'); sourceLabel.append(sourceSelect);
+  sourceSelect.setAttribute('aria-label', 'SQL 数据源');
   const dirtyLabel = make('span', 'sql-editor-dirty', '', 'sql-editor-dirty');
   dirtyLabel.setAttribute('role', 'status');
-  const selector = make('div', '', undefined, 'sql-editor-selector'); selector.append(sourceLabel, dirtyLabel);
+  const selector = make('div', '', undefined, 'sql-editor-selector'); selector.append(sourceSelect);
   const input = make('textarea', 'sql-editor-input');
   input.setAttribute('aria-label', '当前数据源的原文件 SQL'); input.spellcheck = false; input.wrap = 'off';
   const status = make('p', 'sql-editor-status', '', 'sql-editor-status'); status.setAttribute('role', 'status');
-  const hint = make('p', '', '保存只改当前数据源的 SQL，不执行查询、不修改列模板。条件数据源与内置演示暂为只读。', 'muted');
+  const hint = make('p', '', '保存直接覆盖原文件中当前数据源的 SQL，不生成备份。其他数据源不变，不执行查询。外部已打开的 XML 请重新加载后查看。', 'muted');
   const copy = make('button', 'sql-editor-copy', '复制 SQL');
   const check = make('button', 'sql-editor-check', '静态检查');
   const reload = make('button', 'sql-editor-reload', '重新加载当前报表');
+  const reveal = make('button', 'sql-editor-reveal', '打开原报表位置');
   const save = make('button', 'sql-editor-save', '保存到原 XML', 'primary');
   const close = make('button', 'sql-editor-close', '关闭');
-  const actions = make('div', '', undefined, 'sql-editor-actions'); actions.append(copy, check, reload, close, save);
-  dialog.append(heading, filePath, selector, input, status, hint, actions); document.body.append(dialog);
+  const actions = make('div', '', undefined, 'sql-editor-actions'); actions.append(copy, check, reload, reveal, close, save);
+  selector.append(actions);
+  dialog.append(heading, filePath, selector, input, dirtyLabel, status, hint); document.body.append(dialog);
   let session = null, sourceIndex = -1, baseline = '';
   const source = () => session?.sources.find(s => s.index === sourceIndex);
   const dirty = () => !!source()?.editable && input.value !== baseline;
@@ -43,6 +44,7 @@
     copy.disabled = locked || !input.value;
     check.disabled = locked || !session?.token || !input.value || input.value.length > 1024 * 1024;
     reload.disabled = locked || !session || session.demo;
+    reveal.disabled = locked || !session?.token || session.demo;
     save.disabled = locked || !source()?.editable || !dirty() || !input.value.trim() || input.value.length > 1024 * 1024;
     close.disabled = busy;
     dirtyLabel.textContent = input.value.length > 1024 * 1024 ? '超过编辑大小限制，请先复制保留 SQL' : dirty() ? '有未保存修改' : source()?.editable ? '与已读取文件一致' : '只读';
@@ -114,16 +116,21 @@
     status.textContent = result.message + (result.missing?.length ? '\n新增参数需核对条件定义：' + result.missing.join('、') : '');
     progress(result.passed ? '静态检查通过，未执行 SQL。' : '静态检查未通过，未执行 SQL。');
   });
+  reveal.onclick = () => run('正在打开原报表位置…', async () => {
+    await call('sqlEditorReveal', { reportId: session.reportId, token: session.token });
+    status.textContent = '已请求在资源管理器中选中原 XML：' + session.path;
+    progress('已打开原报表位置。');
+  });
   save.onclick = () => run('请确认保存目标…', async () => {
     const index = sourceIndex;
     const result = await call('sqlEditorSave', args());
     if (!result) { status.textContent = '已取消保存，草稿仍保留。'; return; }
     // Mark clean before refreshing the UI. A refresh error must not be presented as a failed disk write.
     load(result.editor, index); clearResult();
-    const message = result.message + (result.backupPath ? '\n原文件备份：' + result.backupPath : '');
+    const message = result.message + '\n已核对文件：' + (result.savedPath || result.editor.path) + '\n数据源：' + (source()?.name || '(未命名)') + '。外部已打开的 XML 请重新加载后查看。';
     try { await refreshSelected(source()?.queryIndex); status.textContent = message; }
     catch { status.textContent = message + '\n界面更新失败。文件已保存，请重新加载当前报表，不要重复覆盖文件。'; }
-    progress(result.reloaded ? 'XML 已保存并重新加载；请核对条件后手动查询。' : 'XML 已保存，重新加载未完成。');
+    progress(result.changed === false ? 'SQL 与磁盘文件一致，无需写入。' : result.reloaded ? 'XML 已保存并回读核对；请核对条件后手动查询。' : 'XML 已保存，重新加载未完成。');
   });
   reload.onclick = () => run('正在重新加载当前报表…', async () => {
     if (!await discardConfirmed()) return;

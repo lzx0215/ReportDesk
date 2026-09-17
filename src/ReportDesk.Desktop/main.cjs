@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { Bridge } = require('./bridge.cjs');
 const { SqlEditorMain } = require('./sql-editor-main.cjs');
-const sqlEditor = new SqlEditorMain(dialog);
+const sqlEditor = new SqlEditorMain(dialog, shell);
 let window, bridge, closing = false, uiBusy = false;
 const testing = !app.isPackaged && process.env.REPORTDESK_TEST === '1';
 const dataDirectory = testing ? path.resolve(process.env.REPORTDESK_TEST_DATA) : path.join(process.env.LOCALAPPDATA, 'ReportDesk');
@@ -66,7 +66,7 @@ ipcMain.handle('reportdesk:call', async (event, method, args = {}) => {
   try {
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('参数格式无效。');
     let data;
-    if (['sqlEditorOpen', 'sqlEditorSave', 'sqlEditorDiscard'].includes(method)) data = await sqlEditor.handle(method, args, window, bridge);
+    if (['sqlEditorOpen', 'sqlEditorSave', 'sqlEditorDiscard', 'sqlEditorReveal'].includes(method)) data = await sqlEditor.handle(method, args, window, bridge);
     else if (method === 'import') {
       const choice = await dialog.showOpenDialog(window, { title: args.folder ? '选择报表根目录或报表目录（自动识别并匹配 XML）' : '导入报表查询 XML', properties: args.folder ? ['openDirectory'] : ['openFile'], filters: [{ name: '报表 XML', extensions: ['xml'] }] });
       data = choice.canceled ? null : await bridge.call('import', { folder: !!args.folder, path: choice.filePaths[0] });

@@ -1,5 +1,7 @@
 # ReportDesk SQL 编辑离线更新（2026-09-17）
 
+后续源码变更：用户要求 SQL 保存不再生成备份。当前保存直接覆盖所选原 XML 中的数据源 SQL，保留写后回读校验；下述已交付离线更新包的备份说明属于原版本行为。后续构建应使用当前源码，不能凭相同版本号判断包内容。
+
 适用于 2026-09-14 交付的 ReportDesk-results-toolbar Electron 0.2.0 Windows x64 完整包。相同版本号不保证文件相同，脚本会以 manifest.json 中的 SHA256 检查基线；不匹配时停止，不能强制混用。不是 WinForms 或 Windows x86 更新包。
 
 ## 安装

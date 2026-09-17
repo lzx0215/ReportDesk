@@ -35,8 +35,13 @@ public sealed class SqlXmlSnapshot
 public sealed class SqlXmlSaveResult
 {
     public SqlXmlSnapshot Snapshot { get; internal set; } = new();
-    public string BackupPath { get; internal set; } = "";
     public bool Changed { get; internal set; }
+}
+
+public sealed class SqlXmlVerificationException : InvalidOperationException
+{
+    public SqlXmlVerificationException(string path, Exception cause)
+        : base("文件替换已完成，但磁盘回读校验未通过，尚不能确认保存成功。请保留草稿，核对原文件后重新加载。原文件：" + path, cause) { }
 }
 
 /// <summary>Edits a single existing SQL element. Does not execute SQL or serialize the report model.</summary>
@@ -123,7 +128,6 @@ public static class SqlXmlEditor
         var directory = System.IO.Path.GetDirectoryName(current.Path)!;
         var suffix = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid().ToString("N");
         var temporary = System.IO.Path.Combine(directory, ".reportdesk-" + suffix + ".tmp");
-        var backup = current.Path + "." + suffix + ".bak"; // Does not end in .xml: discovery must not import backups.
         try
         {
             using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
@@ -133,9 +137,19 @@ public static class SqlXmlEditor
             if (Read(current.Path).Hash != current.Hash)
                 throw new InvalidOperationException("保存前原 XML 已发生变化；未覆盖，请保留草稿并重新读取。");
             token.ThrowIfCancellationRequested();
-            File.Replace(temporary, current.Path, backup, false);
+            // Replace the original without creating a backup; stage first to avoid truncating it on write failure.
+            File.Replace(temporary, current.Path, null, false);
             // The commit point has passed. Do not report a later cancel as 'not saved'.
-            return new SqlXmlSaveResult { Snapshot = next, BackupPath = backup, Changed = true };
+            try
+            {
+                // Confirm the actual file, not just the in-memory bytes prepared for replacement.
+                var persisted = Read(current.Path);
+                if (persisted.Hash != next.Hash || persisted.Sources[sourceIndex].Sql != sql)
+                    throw new IOException("保存后的磁盘内容与提交内容不一致。");
+                return new SqlXmlSaveResult { Snapshot = persisted, Changed = true };
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is XmlException || ex is InvalidOperationException || ex is ArgumentException)
+            { throw new SqlXmlVerificationException(current.Path, ex); }
         }
         finally
         {

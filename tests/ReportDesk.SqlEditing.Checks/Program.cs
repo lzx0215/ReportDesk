@@ -37,7 +37,7 @@ internal static class SqlEditingChecks
     private static void Check(string title, Action action)
     {
         try { action(); Console.WriteLine("PASS " + title); }
-        catch (Exception ex) { failed++; Console.WriteLine("FAIL " + title + " (" + ex.GetType().Name + ")"); }
+        catch (Exception ex) { failed++; Console.WriteLine("FAIL " + title + " (" + ex.GetType().Name + ")\n" + ex); }
     }
     private static Dictionary<string, object> Args(params object[] values)
     {
@@ -58,12 +58,14 @@ internal static class SqlEditingChecks
             foreach (var encoding in new Encoding[] { new UTF8Encoding(false, true), new UTF8Encoding(true, true),
                 new UnicodeEncoding(false, true, true), new UnicodeEncoding(true, true, true), Encoding.GetEncoding(936) })
             {
-                Check("surgical write, backup and encoding: " + encoding.WebName + "/" + encoding.GetPreamble().Length, () => {
+                Check("surgical overwrite without backup and encoding: " + encoding.WebName + "/" + encoding.GetPreamble().Length, () => {
                     var file = Create(encoding); var before = File.ReadAllBytes(file); var snapshot = SqlXmlEditor.Read(file);
                     Assert(snapshot.Sources[0].QueryIndex == -1 && snapshot.Sources[1].QueryIndex == 0 && snapshot.Sources[2].QueryIndex == 1);
                     const string sql = "select '科室<&' as NAME, 4 as N from dual\nwhere 1 < 2";
                     var saved = SqlXmlEditor.Save(snapshot, 2, sql);
-                    Assert(saved.Changed && File.ReadAllBytes(saved.BackupPath).SequenceEqual(before));
+                    Assert(saved.Changed && !File.ReadAllBytes(file).SequenceEqual(before));
+                    Assert(Directory.GetFiles(Path.GetDirectoryName(file)!, "*.bak").Length == 0);
+                    Assert(saved.Snapshot.Hash == ReportImporter.Hash(File.ReadAllBytes(file)) && saved.Snapshot.Sources[2].Sql == sql);
                     Assert(File.ReadAllBytes(file).SequenceEqual(Encode(Fixture(encoding).Replace("select 2 as N from dual", sql), encoding)));
                     Assert(SqlXmlEditor.Read(file).Sources[2].Sql == sql && SqlXmlEditor.Read(file).Sources[1].Sql == snapshot.Sources[1].Sql);
                     Assert(ReportImporter.ImportFolder(Path.GetDirectoryName(file)!).Reports.Count == 1);
@@ -80,7 +82,8 @@ internal static class SqlEditingChecks
             });
             Check("no-op does not rewrite or create backup", () => {
                 var file = Create(); var s = SqlXmlEditor.Read(file); var saved = SqlXmlEditor.Save(s, 1, s.Sources[1].Sql);
-                Assert(!saved.Changed && saved.BackupPath == "" && File.ReadAllBytes(file).SequenceEqual(Encode(Fixture(new UTF8Encoding(false)), new UTF8Encoding(false))));
+                Assert(!saved.Changed && File.ReadAllBytes(file).SequenceEqual(Encode(Fixture(new UTF8Encoding(false)), new UTF8Encoding(false))));
+                Assert(Directory.GetFiles(Path.GetDirectoryName(file)!, "*.bak").Length == 0);
             });
             Check("external edits are not overwritten", () => {
                 var file = Create(); var s = SqlXmlEditor.Read(file); File.AppendAllText(file, " "); var external = File.ReadAllBytes(file);
@@ -137,6 +140,7 @@ internal static class SqlEditingChecks
                 var payload = Args("reportId", id, "token", editor["token"], "sourceIndex", 1, "sql", "select 5 as N from dual", "path", other);
                 var saved = Call(service, "sqlEditorSave", payload);
                 Assert((bool)saved["saved"] && (bool)saved["reloaded"]);
+                Assert((string)saved["savedPath"] == file && ((string)saved["message"]).Contains("回读核对"));
                 Assert(((string)Call(service, "definition", Args("reportId", id))["text"]).Contains("select 5 as N"));
                 Assert(!((string)Call(service, "definition", Args("reportId", otherId))["text"]).Contains("select 99 as N"));
                 Throws(() => Call(service, "page", Args("resultId", "stale-result")));

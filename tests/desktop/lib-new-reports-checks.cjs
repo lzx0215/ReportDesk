@@ -3,7 +3,7 @@ const fs = require('node:fs'), path = require('node:path'), assert = require('no
 const { once } = require('node:events'), { Bridge } = require('../../src/ReportDesk.Desktop/bridge.cjs');
 const root = path.resolve(__dirname, '../..');
 const { _electron: electron } = require(path.join(root, 'src/ReportDesk.Desktop/node_modules/playwright'));
-const lib = path.resolve(process.argv[2] || 'D:/系统知识库/00_Inbox/yljhis/LIB/LIB');
+const lib = path.resolve(process.argv[2] || process.env.REPORTDESK_LIB || 'E:/his/LIB');
 const run = path.join(root, 'artifacts/verification/desktop', 'new-reports-' + Date.now());
 const screenshots = path.join(root, 'output/playwright', path.basename(run));
 const data = path.join(run, 'data'), config = path.join(run, 'config'), source = path.join(run, 'source');

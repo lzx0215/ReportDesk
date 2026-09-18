@@ -13,7 +13,7 @@ try {
         $env:ELECTRON_GET_USE_PROXY = 'true'
         & npm ci --no-fund
         if ($LASTEXITCODE -ne 0) { throw 'Desktop dependency restore failed' }
-        & node (Join-Path $projectRoot 'tests\desktop\ui-checks.cjs')
+        & node (Join-Path $projectRoot 'tests\desktop\sql-editor-checks.cjs')
         if ($LASTEXITCODE -ne 0) { throw 'Desktop UI checks failed' }
         if (-not $SkipPackage) {
             & npm run package
@@ -22,7 +22,7 @@ try {
     } finally { Pop-Location }
     if (-not $SkipPackage) {
         $destination = Join-Path $projectRoot 'artifacts\desktop\ReportDesk-win32-x64'
-        Copy-Item -LiteralPath 'docs\ReportVisibility.md','docs\Acceptance.md','docs\Desktop.md','config\report-visibility.example.xml' -Destination $destination
+        Copy-Item -LiteralPath 'README.md','docs\ReportVisibility.md','docs\Acceptance.md','docs\Desktop.md','docs\QueryConditionEditing.md','docs\ReportLayoutEditing.md','config\report-visibility.example.xml' -Destination $destination
         $oracleLicense = Join-Path $env:USERPROFILE '.nuget\packages\oracle.manageddataaccess\19.32.0\LICENSE.txt'
         if (Test-Path -LiteralPath $oracleLicense) { Copy-Item -LiteralPath $oracleLicense -Destination (Join-Path $destination 'Oracle-LICENSE.txt') }
         & node 'tests\desktop\package-checks.cjs'

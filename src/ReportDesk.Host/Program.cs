@@ -12,6 +12,7 @@ using ReportDesk.Core;
 
 namespace ReportDesk.Host;
 
+#if !REPORTDESK_WEB
 internal sealed class Request
 {
     public int id { get; set; }
@@ -82,6 +83,8 @@ internal static class Program
     }
 }
 
+#endif
+
 internal sealed partial class Service : IDisposable
 {
     private readonly ConnectionSettingsStore store;
@@ -90,6 +93,7 @@ internal sealed partial class Service : IDisposable
     private bool sourcesRestored;
     private readonly List<string> startupWarnings = new();
     private readonly ReportVisibility visibility;
+    private readonly bool allReports;
     private readonly ReportLocations locations;
     private readonly bool offline;
     private readonly string configDirectory;
@@ -100,12 +104,13 @@ internal sealed partial class Service : IDisposable
     private DataTable? lookup;
     private string resultId = "", lookupId = "", context = "";
     private int revision;
-    public Service(string? data, string config, bool offline, Func<ConnectionSettings, string, string>? testConnection = null)
+    public Service(string? data, string config, bool offline, Func<ConnectionSettings, string, string>? testConnection = null, bool allReports = false)
     {
         configDirectory = Path.GetFullPath(config); this.offline = offline;
         this.testConnection = testConnection ?? OracleQueryService.TestConnection;
         sourcesStore = new ImportSourcesStore(data);
-        visibility = ReportVisibility.Load(Path.Combine(configDirectory, ReportVisibility.FileName));
+        this.allReports = allReports;
+        visibility = allReports ? null! : ReportVisibility.Load(Path.Combine(configDirectory, ReportVisibility.FileName));
         locations = ReportLocations.Load(Path.Combine(configDirectory, ReportLocations.FileName));
         store = new ConnectionSettingsStore(data); catalog = new Catalog { Connection = store.Load() };
         try { password = CatalogStore.Unprotect(catalog.Connection.ProtectedPassword); }
@@ -119,7 +124,8 @@ internal sealed partial class Service : IDisposable
         IEnumerable<string> Flatten(object v) => v is Dictionary<string, object> d ? d.Values.SelectMany(Flatten) : new[] { Convert.ToString(v) ?? "" };
         return ErrorLog.ConnectionValues(catalog.Connection, password).Concat(Flatten(args)).Concat(catalog.Reports.SelectMany(r => r.Queries.Select(q => q.Sql)));
     }
-    private IEnumerable<ReportDefinition> Visible() => catalog.Reports.Where(ReportClassification.IsStandalone).Where(visibility.Includes);
+    private bool IncludesReport(ReportDefinition report) => allReports || visibility.Includes(report);
+    private IEnumerable<ReportDefinition> Visible() => catalog.Reports.Where(ReportClassification.IsStandalone).Where(IncludesReport);
     private ReportDefinition Report(Dictionary<string, object> a) => Visible().FirstOrDefault(r => r.Id == Text(a, "reportId")) ?? throw new InvalidOperationException("报表不存在或不在显示清单内。");
     private QueryDefinition Query(ReportDefinition r, Dictionary<string, object> a)
     {
@@ -267,10 +273,12 @@ internal sealed partial class Service : IDisposable
     private ConnectionSettings ReadSettings(Dictionary<string, object> a) => new() { Name = Text(a, "name"), Mode = (ConnectionMode)Number(a, "mode"), Host = Text(a, "host"), Port = Number(a, "port", 1521), Service = Text(a, "service"), Username = Text(a, "username"), TnsFile = Text(a, "tnsFile"), TnsAlias = Text(a, "tnsAlias") };
     private void MergeImport(ImportSummary summary)
     {
+        OnReportsMerged(summary);
         ReportImporter.Merge(catalog, summary);
         foreach (var report in summary.Reports)
             if (summary.Inventory != null) importRoots[report.Id] = summary.Inventory.Root;
     }
+    partial void OnReportsMerged(ImportSummary summary);
     private void RestoreSources(CancellationToken token, Action<string> progress)
     {
         if (sourcesRestored) return;
@@ -338,7 +346,7 @@ internal sealed partial class Service : IDisposable
         token.ThrowIfCancellationRequested();
         foreach (var summary in additions) MergeImport(summary);
         var added = additions.SelectMany(s => s.Reports).ToList();
-        return new { reports = List(), addedCount = added.Count, visibleAddedCount = added.Count(visibility.Includes),
+        return new { reports = List(), addedCount = added.Count, visibleAddedCount = added.Count(IncludesReport),
             sourceCount = sources.Count, incomplete = incomplete.Count, errors };
     }
     private object SaveSettings(ConnectionSettings settings, string nextPassword, bool remember)
@@ -355,11 +363,11 @@ internal sealed partial class Service : IDisposable
         {
             case "bootstrap":
                 RestoreSources(token, progress);
-                return new { reports = List(), settings = Settings(), demoVisible = visibility.Includes(DemoData.Report()), offline, warnings = startupWarnings.ToArray() };
+                return new { reports = List(), settings = Settings(), demoVisible = IncludesReport(DemoData.Report()), offline, warnings = startupWarnings.ToArray() };
             case "list": return List();
             case "select": Clear(); return Details(a);
             case "demo":
-                if (!visibility.Includes(DemoData.Report())) throw new InvalidOperationException("演示报表不在显示清单内。");
+                if (!IncludesReport(DemoData.Report())) throw new InvalidOperationException("演示报表不在显示清单内。");
                 if (!catalog.Reports.Any(r => r.Id == "built-in-demo")) { catalog.Reports.Add(DemoData.Report()); }
                 return List();
             case "definition": var report = Report(a); return new { title = report.Name, text = string.Join("\n\n", report.Queries.Select(q => q.Name + "\n" + q.Sql)) };

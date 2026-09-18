@@ -1,0 +1,23 @@
+/* Capability defaults stay closed until /api/session has completed. */
+html:not(.web-admin) #import-file,
+html:not(.web-admin) #import-folder,
+html:not(.web-admin) #check-new,
+html:not(.web-admin) #settings-open,
+html:not(.web-admin) #logs,
+html:not(.web-admin) #sql,
+html:not(.web-admin) #connection,
+html:not(.web-admin) #sql-editor,
+html:not(.web-admin) #layout-editor,
+#tns-pick { display: none !important; }
+[hidden] { display: none !important; }
+footer { gap: 12px; align-items: flex-start; height: auto; }
+footer span:first-child { flex: 1; white-space: normal; }
+footer span:last-child { white-space: nowrap; }
+#web-sync { border-top: 1px solid var(--border-subtle); margin-top: 18px; padding-top: 12px; }
+#web-sync-status { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28vh; overflow: auto; }
+#web-sync-dialog { width: min(720px, 85vw); }
+.web-conflict { border: 1px solid var(--border-subtle); padding: 10px; margin: 8px 0; }
+.web-conflict button { margin-right: 8px; }
+.web-access-error { padding: 20px; color: var(--text-primary); background: var(--surface-soft); }
+.web-unavailable .app { opacity: .6; pointer-events: none; }
+.web-clipboard { position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; }

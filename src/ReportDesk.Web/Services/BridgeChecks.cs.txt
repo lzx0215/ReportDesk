@@ -1,0 +1,184 @@
+// Offline transport/state checks. XML is copied from the real read-only LIB.
+// Injected DataTables are transport-only markers, NEVER claimed to be Oracle/HIS results.
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Reflection;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Web.Script.Serialization;
+using ReportDesk.Core;
+using ReportDesk.Host;
+using ReportDesk.Web.Services;
+
+namespace ReportDesk.Web { public sealed class WebUserException : Exception { public WebUserException(string message) : base(message) { } } }
+
+internal static class BridgeChecks
+{
+    private static int passed;
+    private static readonly JavaScriptSerializer Json = new() { MaxJsonLength = int.MaxValue };
+    private static Dictionary<string, object> A(params object[] values)
+    { var a = new Dictionary<string, object>(); for (int i = 0; i < values.Length; i += 2) a.Add((string)values[i], values[i + 1]); return a; }
+    private static Dictionary<string, object> D(object dto) => Json.Deserialize<Dictionary<string, object>>(Json.Serialize(dto));
+    private static void Assert(bool condition) { if (!condition) throw new Exception("Check failed"); }
+    private static void Check(string name, Action check) { check(); passed++; Console.WriteLine("PASS " + name); }
+    private static void Throws<T>(Action action, string contains = "") where T : Exception
+    { try { action(); } catch (T ex) { Assert(ex.Message.Contains(contains)); return; } throw new Exception("Expected " + typeof(T).Name); }
+    private static void Put(Service service, string field, object value) => typeof(Service).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(service, value);
+    private static DataTable Transport(string owner)
+    { var t = new DataTable(); t.Columns.Add("Owner"); t.Columns.Add("Code"); t.Rows.Add(owner, "12345678901234567890"); t.Rows.Add(owner, DBNull.Value); return t; }
+    private static object Call(WebBackend backend, WebContext context, string method, Dictionary<string, object>? args = null, bool admin = false)
+        => backend.Call(context, method, args ?? A(), CancellationToken.None, _ => { }, admin);
+    private static string Sheet(byte[] bytes, string name)
+    { using var zip = new ZipArchive(new MemoryStream(bytes)); using var reader = new StreamReader(zip.GetEntry(name)!.Open()); return reader.ReadToEnd(); }
+
+    private static int Main(string[] arguments)
+    {
+        string lib = arguments[0], root = Path.Combine(Path.GetTempPath(), "ReportDesk-WebBridge-" + Guid.NewGuid().ToString("N"));
+        string data = Path.Combine(root, "data"), reports = Path.Combine(root, "reports"), config = Path.Combine(data, "config");
+        Directory.CreateDirectory(config); Directory.CreateDirectory(reports);
+        ErrorLog.Initialize(Path.Combine(root, "logs"));
+        var input = new[] { "按科室(出院)查询设置.xml", "门诊中药处方查询查询设置.xml" };
+        var paths = input.Select(name => Path.Combine(reports, name)).ToArray();
+        for (int i = 0; i < input.Length; i++) File.Copy(Path.Combine(lib, "LIB", "Config", "Xml", input[i]), paths[i]);
+        File.WriteAllText(Path.Combine(config, "report-visibility.xml"), "<not-a-desktop-visibility-file />");
+        try
+        {
+            using var backend = new WebBackend(data, reports);
+            using var one = backend.CreateSession(); using var two = backend.CreateSession();
+            var reportsDto = ((System.Collections.IEnumerable)Call(backend, one, "list")).Cast<object>().Select(D).ToArray();
+            string id = (string)reportsDto[0]["id"];
+            var selected = D(Call(backend, one, "select", A("reportId", id)));
+            string hash = (string)selected["definitionHash"];
+            Check("real copied LIB imported; Web ignores desktop visibility", () => Assert(reportsDto.Length == 2));
+            Check("default configured root supports check-new without persisting sources", () => {
+                var added = D(Call(backend, one, "checkNewReports", admin: true));
+                Assert(Convert.ToInt32(added["addedCount"]) == 0 && !File.Exists(Path.Combine(config, "import-sources.json")));
+            });
+            Check("public DTO contains no SQL, paths or connection fields", () => {
+                backend.SetConnectionSettings(new ConnectionSettings { Host = "private-host-marker", Username = "private-user-marker", Service = "private-service-marker" }, "private-secret-marker");
+                foreach (var dto in new[] { Call(backend, one, "bootstrap"), Call(backend, one, "list"), Call(backend, one, "select", A("reportId", id)), Call(backend, one, "definition", A("reportId", id)), Call(backend, one, "relatedFiles", A("reportId", id)) })
+                {
+                    string json = Json.Serialize(dto);
+                    Assert(!json.Contains("private-") && !json.Contains("SourcePath") && !json.Contains("\"path\"") && !json.Contains("\"host\"") && !json.Contains("\"username\"") && !json.Contains("select "));
+                }
+                var definition = D(Call(backend, one, "definition", A("reportId", id)));
+                Assert((string)definition["text"] == "" && definition.ContainsKey("textParameterNames"));
+            });
+            Check("connection injection and retrieval are defensive snapshots", () => {
+                var copy = backend.GetConnection(); copy.Settings.Host = "mutated";
+                Assert(backend.GetConnection().Settings.Host == "private-host-marker" && copy.Offline);
+                Throws<ReportDesk.Web.WebUserException>(() => backend.GetConnectionString(), "离线");
+            });
+            Check("explicit public/admin allow-lists", () => {
+                foreach (var method in new[] { "settings", "saveSettings", "import", "sqlEditorSave", "sqlEditorReveal", "demo", "export", "GetConnectionString" })
+                    Throws<InvalidOperationException>(() => Call(backend, one, method));
+                Throws<InvalidOperationException>(() => Call(backend, one, "unrecognized", admin: true));
+                var reveal = D(Call(backend, one, "sqlEditorReveal", A("reportId", id), true)); Assert(reveal.Count == 2 && reveal.ContainsKey("title") && reveal.ContainsKey("text"));
+            });
+            Check("query and lookup reject missing/stale definition version safely", () => {
+                foreach (var method in new[] { "query", "lookup" })
+                    Throws<ReportDesk.Web.WebUserException>(() => Call(backend, one, method, A("reportId", id, "definitionHash", "old")), "定义已变化");
+            });
+            Check("per-tab result and lookup identity isolation", () => {
+                Put(one.Service, "result", new QueryResult { Table = Transport("tab-one") }); Put(one.Service, "resultId", "one");
+                Put(two.Service, "result", new QueryResult { Table = Transport("tab-two") }); Put(two.Service, "resultId", "two");
+                Put(one.Service, "lookup", Transport("lookup-one")); Put(one.Service, "lookupId", "lookup-one");
+                Put(two.Service, "lookup", Transport("lookup-two")); Put(two.Service, "lookupId", "lookup-two");
+                Throws<ReportDesk.Web.WebUserException>(() => Call(backend, two, "page", A("resultId", "one")), "失效");
+                Throws<ReportDesk.Web.WebUserException>(() => Call(backend, two, "lookupAll", A("resultId", "lookup-one")), "失效");
+                Assert(Json.Serialize(Call(backend, two, "page", A("resultId", "two"))).Contains("tab-two"));
+            });
+            Check("one tab lock never blocks another tab catalog", () => {
+                lock (one.Gate) { var next = Task.Run(() => Call(backend, two, "list")); Assert(next.Wait(5000)); }
+            });
+            Check("full filtered/sorted XLSX stays in memory and preserves precision/null", () => {
+                var before = Directory.GetFiles(root, "*", SearchOption.AllDirectories).OrderBy(x => x).ToArray();
+                var view = D(Call(backend, two, "view", A("resultId", "two", "filter", "123456789", "sort", 1, "descending", true)));
+                var bytes = backend.Export(two, A("resultId", "two", "revision", view["revision"]), CancellationToken.None);
+                string sheet = Sheet(bytes, "xl/worksheets/sheet1.xml");
+                Assert(sheet.Contains("12345678901234567890") && sheet.Contains("inlineStr") && !sheet.Contains("r=\"3\""));
+                Assert(Sheet(bytes, "xl/worksheets/sheet2.xml").Contains("不另行查询数据库"));
+                Assert(before.SequenceEqual(Directory.GetFiles(root, "*", SearchOption.AllDirectories).OrderBy(x => x)));
+                using var table = Transport("stream"); using var stream = new MemoryStream(); XlsxExporter.Export(table, stream, "transport only"); Assert(stream.CanWrite);
+                Assert(Sheet(stream.ToArray(), "xl/worksheets/sheet1.xml").Contains("r=\"B3\""));
+            });
+            var beforeBytes = paths.Select(File.ReadAllBytes).ToArray();
+            var editor = D(Call(backend, one, "sqlEditorOpen", A("reportId", id), true));
+            var source = ((System.Collections.IEnumerable)editor["sources"]).Cast<object>().Select(D).First(s => (bool)s["editable"]);
+            string changedPath = (string)editor["path"];
+            var save = A("reportId", id, "token", editor["token"], "sourceIndex", source["index"], "sql", (string)source["sql"] + "\n-- isolated bridge verification");
+            Check("GetEditPaths does not rotate editor tokens or accept client path", () => {
+                var editPaths = backend.GetEditPaths(one, save, false); Assert(editPaths.Count == 1 && editPaths[0] == changedPath);
+                Throws<ReportDesk.Web.WebUserException>(() => backend.GetEditPaths(one, save, true), "列预览已失效");
+            });
+            Check("SQL save is deferred until transaction reload and retains other tab results", () => {
+                var saved = D(Call(backend, one, "sqlEditorSave", save, true)); Assert((bool)saved["saved"]);
+                using var observer = backend.CreateSession();
+                Assert((string)D(Call(backend, observer, "select", A("reportId", id)))["definitionHash"] == hash);
+                backend.ReloadChangedReportsStrict(new[] { changedPath });
+                Assert((string)D(Call(backend, observer, "select", A("reportId", id)))["definitionHash"] != hash);
+                Assert(Json.Serialize(Call(backend, two, "page", A("resultId", "two"))).Contains("tab-two"));
+                Throws<ReportDesk.Web.WebUserException>(() => Call(backend, observer, "query", A("reportId", id, "definitionHash", hash)), "定义已变化");
+            });
+            Check("strict batch reload failure publishes zero partial definitions", () => {
+                using var observer = backend.CreateSession();
+                var prior = (string)D(Call(backend, observer, "select", A("reportId", id)))["definitionHash"];
+                var valid = SqlXmlEditor.Read(changedPath); var editable = valid.Sources.First(s => s.Editable);
+                SqlXmlEditor.Save(valid, editable.Index, editable.Sql + "\n-- staged unpublished change");
+                var badPath = paths.First(p => p != changedPath); var recover = File.ReadAllBytes(badPath);
+                File.WriteAllText(badPath, "<broken>");
+                Throws<InvalidOperationException>(() => backend.ReloadChangedReportsStrict(paths));
+                Assert((string)D(Call(backend, observer, "select", A("reportId", id)))["definitionHash"] == prior);
+                File.WriteAllBytes(badPath, recover); backend.ReloadChangedReportsStrict(paths);
+                Assert((string)D(Call(backend, observer, "select", A("reportId", id)))["definitionHash"] != prior);
+                Assert(Json.Serialize(Call(backend, two, "page", A("resultId", "two"))).Contains("tab-two"));
+            });
+            Check("cancelled strict reload publishes no changes", () => {
+                using var cts = new CancellationTokenSource(); cts.Cancel();
+                Throws<OperationCanceledException>(() => backend.ReloadChangedReportsStrict(paths, cts.Token));
+            });
+            Check("path boundary rejects sibling traversal and outside remembered sources", () => {
+                Throws<InvalidOperationException>(() => WebBackend.ValidatePath(Path.Combine(root, "outside.xml"), reports));
+                var otherData = Path.Combine(root, "other-data"); Directory.CreateDirectory(Path.Combine(otherData, "config"));
+                File.WriteAllText(Path.Combine(otherData, "config", "import-sources.json"), Json.Serialize(new[] { new { Path = lib, Folder = true } }));
+                using var guarded = new WebBackend(otherData, reports); using var session = guarded.CreateSession();
+                Assert(!((System.Collections.IEnumerable)Call(guarded, session, "list")).Cast<object>().Any());
+                Assert(!File.Exists(Path.Combine(otherData, "config", "connection.json")));
+            });
+            Check("session construction and disposal never scan/write source directories", () => {
+                var before = Directory.GetFiles(reports).Select(p => p + ":" + File.GetLastWriteTimeUtc(p).Ticks).ToArray();
+                for (int i = 0; i < 10; i++) using (backend.CreateSession()) { }
+                Assert(before.SequenceEqual(Directory.GetFiles(reports).Select(p => p + ":" + File.GetLastWriteTimeUtc(p).Ticks)));
+            });
+            Check("clear affects only its own context", () => {
+                Call(backend, one, "clear"); Assert(Json.Serialize(Call(backend, two, "page", A("resultId", "two"))).Contains("tab-two"));
+                one.Dispose(); Throws<ObjectDisposedException>(() => Call(backend, one, "list"));
+            });
+            Check("full real LIB bootstrap and all definitions are read-only public metadata", () => {
+                using var full = new WebBackend(data, lib); using var session = full.CreateSession();
+                var rows = ((System.Collections.IEnumerable)Call(full, session, "list")).Cast<object>().Select(D).ToArray();
+                Assert(rows.Length > 2);
+                string listing = Json.Serialize(Call(full, session, "bootstrap"));
+                Assert(!listing.Contains("\"path\"") && !listing.Contains("\"username\"") && !listing.Contains("\"sql\""));
+                int selectedCount = 0;
+                foreach (var row in rows)
+                {
+                    var rid = (string)row["id"];
+                    var definition = D(Call(full, session, "definition", A("reportId", rid)));
+                    Assert((string)definition["text"] == "" && definition.Count == 3);
+                    var detail = D(Call(full, session, "select", A("reportId", rid)));
+                    Assert(detail.ContainsKey("definitionHash") && !detail.ContainsKey("path")); selectedCount++;
+                }
+                Console.WriteLine("Real LIB metadata checked: " + rows.Length + " reports, " + selectedCount + " selections; no Oracle execution.");
+            });
+            Console.WriteLine("PASS " + passed + " checks. NOT RUN: Oracle/IIS/live HIS equivalence. Artifacts: " + root);
+            return 0;
+        }
+        catch (Exception ex) { Console.WriteLine("FAIL after " + passed + " checks: " + ex); Console.WriteLine("Artifacts: " + root); return 1; }
+    }
+}

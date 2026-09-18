@@ -1,10 +1,12 @@
 'use strict';
 // In-memory values belong to the report session, not to the lifetime of a view.
 window.QueryState = {
-  create(details, definitionText) {
+  create(details, definitionText, textParameterNames) {
     // Existing read-only definition IPC; no SQL execution or rewriting. Text aliases
     // used by any query in this report are conservatively treated as business values.
-    const textParameters = [...definitionText.matchAll(/&([\p{L}_][\p{L}\p{Nd}_]*)\.Text\b/gu)].map(m => m[1].toLowerCase());
+    const textParameters = window.reportDesk?.isWeb
+      ? (Array.isArray(textParameterNames) ? textParameterNames : []).filter(name => typeof name === 'string').map(name => name.toLowerCase())
+      : [...definitionText.matchAll(/&([\p{L}_][\p{L}\p{Nd}_]*)\.Text\b/gu)].map(m => m[1].toLowerCase());
     return { reportId: details.id, source: details.source, details, parameterValues: new Map(), textParameters, lastExecutedQuerySnapshot: null };
   },
   capture(input, definition) {

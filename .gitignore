@@ -2,6 +2,7 @@
 **/obj/
 artifacts/
 output/playwright/
+.playwright-cli/
 output/
 **/node_modules/
 .vs/

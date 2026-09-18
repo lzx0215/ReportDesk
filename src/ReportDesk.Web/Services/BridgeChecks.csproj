@@ -1,0 +1,22 @@
+<Project>
+  <PropertyGroup>
+    <BaseIntermediateOutputPath>../obj/BridgeChecks/</BaseIntermediateOutputPath>
+    <BaseOutputPath>../bin/BridgeChecks/</BaseOutputPath>
+  </PropertyGroup>
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><PlatformTarget>x64</PlatformTarget>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <DefineConstants>$(DefineConstants);REPORTDESK_WEB</DefineConstants>
+    <StartupObject>BridgeChecks</StartupObject>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../ReportDesk.Core/ReportDesk.Core.csproj" />
+    <Reference Include="System.Web.Extensions" /><Reference Include="System.Data" />
+    <Reference Include="System.IO.Compression" /><Reference Include="System.IO.Compression.FileSystem" />
+    <Compile Include="../../ReportDesk.Host/*.cs" Link="Host/%(Filename)%(Extension)" />
+    <Compile Include="Service.Web.cs" /><Compile Include="WebBackend.cs" />
+    <Compile Include="BridgeChecks.cs.txt" />
+  </ItemGroup>
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+</Project>

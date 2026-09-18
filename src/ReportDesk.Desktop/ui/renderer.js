@@ -100,7 +100,7 @@ async function select(id, source = 0, editConditions = false) {
   catch (e) { selected = null; $('#report-title').textContent = '请选择有效的报表'; throw e; }
   $('#report-title').textContent = detail.name;
   $('#conditions-heading').textContent = detail.name + ' - 查询条件';
-  $('#location-source').textContent = detail.status + (detail.demo ? ' · 完全离线生成' : ' · ' + detail.path);
+  $('#location-source').textContent = detail.status + (detail.demo ? ' · 完全离线生成' : ' · ' + (api.isWeb ? '服务器受控报表目录' : detail.path));
   const box = $('#report-locations');
   for (const location of detail.locations || []) {
     const row = element('div', undefined, 'location-entry');
@@ -114,7 +114,7 @@ async function select(id, source = 0, editConditions = false) {
   const blocking = detail.selectedIssues || detail.issues;
   $('#issues').textContent = blocking.length ? '当前数据源待适配，不能查询：\n' + blocking.join('\n') : (detail.issues.length ? '当前数据源可试查；其他数据源仍待适配，详情见报表说明。' : '');
   const definition = await call('definition', { reportId: id });
-  currentReportSession = window.QueryState.create(detail, definition.text);
+  currentReportSession = window.QueryState.create(detail, api.isWeb ? '' : definition.text, api.isWeb ? definition.textParameterNames : undefined);
   queryFields.mount(currentReportSession); renderQuerySummary(); setConditionsOpen(editConditions, false);
   renderList(); progress('当前报表尚未查询。');
 }
@@ -177,7 +177,7 @@ function renderResult() {
 async function view() { page = await call('view', { resultId: page.resultId, filter: $('#result-filter').value, sort: sortColumn, descending }); selectedRows.clear(); renderResult(); progress('筛选与排序已应用于完整结果。'); }
 $('#filter-form').onsubmit = e => { e.preventDefault(); if (page) task('正在筛选结果…', view); };
 for (const [id,delta] of [['#previous',-200],['#next',200]]) $(id).onclick = () => task('正在读取结果…', async () => { page = await call('page', { resultId: page.resultId, revision: page.revision, offset: Math.max(0,page.offset+delta) }); selectedRows.clear(); renderResult(); });
-$('#export').onclick = () => task('请选择导出位置…', async () => { const output = await call('export', { resultId: page.resultId, revision: page.revision }); progress(output ? `已导出 ${output.count} 行当前筛选与排序结果。` : '已取消导出。'); });
+$('#export').onclick = () => task(api.isWeb ? '正在准备 Excel 下载…' : '请选择导出位置…', async () => { const output = await call('export', { resultId: page.resultId, revision: page.revision }); progress(output ? (api.isWeb ? '已请求下载完整筛选与排序结果，请检查浏览器下载记录。' : `已导出 ${output.count} 行当前筛选与排序结果。`) : '已取消导出。'); });
 $('#copy').onclick = () => task('正在复制…', async () => { const rows = [...selectedRows].sort((a,b)=>a-b).map(i=>page.rows[i]); const quote = x => { const text = x ?? ''; return /[\t\r\n"]/.test(text) ? '"' + text.replaceAll('"','""') + '"' : text; }; await call('copy', { text: [page.columns.map(c=>c.name),...rows].map(row=>row.map(quote).join('\t')).join('\r\n') }); progress('已复制选中行及列标题。'); });
 for (const [id,folder] of [['#import-file',false],['#import-folder',true]]) $(id).onclick = () => task('请选择报表定义…', async () => {
   const imported = await call('import', { folder }); if (!imported) { progress('已取消导入。'); return; }
@@ -192,6 +192,12 @@ $('#metadata-open').onclick = () => { $('#meta-guidance').textContent = (detail.
 $('#related-xml').onclick = () => task('正在检查关联 XML…', async () => {
   const result = await call('relatedFiles', { reportId: selected });
   const statuses = { Matched: '已按显式路径匹配', Candidate: '名称候选，关联待核对', Ambiguous: '多个候选，未自动选择', Missing: '未找到', Rejected: '引用超出扫描范围或格式不支持' };
+  if (api.isWeb && result.summaryOnly === true) {
+    const lines = (result.files || []).map(f => `${f.Role}\n${statuses[f.Status] || f.Status}\n关联文件数量：${f.count ?? 0}`);
+    progress('关联 XML 摘要检查完成。');
+    notice((result.title || '关联 XML') + ' · 关联摘要', (lines.join('\n\n') || '没有识别到可匹配的版式引用。') + '\n\n普通页面仅显示关联状态和数量，不返回服务器路径或 SQL；匹配不代表已支持版式规则。' + (result.warnings?.length ? '\n\n' + result.warnings.join('\n') : ''));
+    return;
+  }
   const lines = result.files.map(f => `${f.Role}\n${statuses[f.Status]}\n配置/约定：${f.Reference || '未填写'}${f.Paths.length ? '\n' + f.Paths.join('\n') : ''}`);
   progress('关联 XML 检查完成，匹配信息见弹窗。');
   notice('关联 XML（只读检查）', `扫描目录：${result.root}\n查询定义：${result.query}\n\n` + (lines.join('\n\n') || '没有识别到可匹配的版式引用。') + '\n\n配套文件仅识别关联，不执行版式中的映射或交叉规则；原文件保持不变。' + (result.warnings.length ? '\n\n扫描警告：\n' + result.warnings.join('\n') : ''));

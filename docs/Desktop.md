@@ -1,4 +1,4 @@
-# Electron 桌面版（0.2.0 开发版）
+# Electron 桌面版（0.3.0）
 
 目标环境：Windows 10 / Windows 11 x64，安装 .NET Framework 4.8。Win7、Win8、32 位系统和网页版不在本轮实现范围。旧 WinForms 源码及构建入口保留用于回归验证；新界面在 `src/ReportDesk.Desktop`，不再用 WinForms 展示主界面。
 
@@ -63,7 +63,7 @@ Host 负责报表操作、参数转换、结果句柄、筛选排序、导出及
 
 真实 Oracle 19c、TNS/SID/多地址、服务器取消行为、业务口径、Win10 x64 干净机以及 Excel/WPS 人工打开检查：**NOT RUN**，沿用 Acceptance.md 现场清单。运行时支持 Windows 10 不等于所有 Windows 10 build 均已实测。
 
-当前开发版本不是已完成现场验收的正式发布。本轮没有 commit、push、PR 或自动部署。
+本版本为 Windows x64 完整发布包。它不替代 HIS 现场验收：真实 Oracle 业务口径、HIS 显示/打印及目标机器兼容性仍须按 [Acceptance.md](Acceptance.md) 验证。
 
 同一运行时/依赖的离线小更新可用 `powershell -File scripts/build-update.ps1 -BaseDirectory '上一份完整程序目录'` 生成，再用 `node tests/desktop/update-checks.cjs '生成的更新目录'` 验证隔离旧包的替换、真实 EXE 启动及回退。交付仅包含 app.asar、Host EXE 和 Core DLL；安装脚本检查基线哈希并备份，不替换用户数据或岗位显示配置。完整操作见 [OfflineUpdate.md](OfflineUpdate.md)。
 

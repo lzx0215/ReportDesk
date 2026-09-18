@@ -53,6 +53,7 @@ internal sealed partial class Service
             switch (method)
             {
                 case "sqlEditorOpen":
+                    ClearLayoutPlan();
                     var r = Report(a);
                     if (r.IsDemo)
                     {
@@ -89,6 +90,7 @@ internal sealed partial class Service
                             message = ErrorLog.Sanitize(ex.Message, new[] { sql }) + "\n此检查不阻止保存文件；原有查询执行保护保持不变。" };
                     }
                 case "sqlEditorSave":
+                    ClearLayoutPlan();
                     var file = EditorFile(a);
                     var report = Report(a);
                     progress("正在覆盖原 XML 中的当前 SQL，未执行数据库查询…");
@@ -117,12 +119,15 @@ internal sealed partial class Service
                     return new { saved = true, changed = saved.Changed, reloaded, savedPath = saved.Snapshot.Path,
                         message, editor = EditorData(report, saved.Snapshot) };
                 case "reloadReport":
+                    ClearLayoutPlan();
                     var previous = Report(a);
                     if (previous.IsDemo) throw new InvalidOperationException("内置演示没有外部文件需要重新加载。");
                     progress("正在重新加载当前报表，未扫描其他报表…");
                     var reloadedReport = ReloadSingle(previous, token);
                     sqlEditorFile = null; sqlEditorToken = ""; sqlEditorReportId = "";
                     return new { reportId = reloadedReport.Id, hash = reloadedReport.SourceHash, reloaded = true };
+                case "layoutPreview": return PreviewLayout(a, token, progress);
+                case "layoutSave": return SaveLayout(a, token, progress);
                 default:
                     throw new InvalidOperationException("不支持的后台操作。");
             }

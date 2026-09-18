@@ -155,7 +155,8 @@ internal static class SqlEditingChecks
                 Call(service, "reloadReport", Args("reportId", id));
                 var ready = Call(service, "select", Args("reportId", id)); Assert(((object[])ready["selectedIssues"]).Length == 0);
             });
-            Console.WriteLine(failed == 0 ? "All SQL editing checks passed (no Oracle connection)." : failed + " check(s) failed.");
+            failed += LayoutEditingChecks.Run(Root);
+            Console.WriteLine(failed == 0 ? "All SQL editing and layout checks passed (no Oracle connection)." : failed + " check(s) failed.");
             return failed == 0 ? 0 : 1;
         }
         finally { try { Directory.Delete(Root, true); } catch { } }

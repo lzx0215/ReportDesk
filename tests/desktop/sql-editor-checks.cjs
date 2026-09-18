@@ -11,6 +11,10 @@ const fixture = () => ({ reportId: 'report', title: '报表', path: 'C:\\reports
   { index: 2, queryIndex: 1, name: 'same', kind: 'DetailReportUsing', sql: 'select 2 from dual', editable: true },
   { index: 3, queryIndex: 2, name: 'options', kind: 'ConditionUsing', sql: 'select 3 from dual', editable: false }
 ] });
+const layoutFixture = () => ({ previewToken: 'preview', queryPath: fixture().path, layoutPath: 'C:\\reports\\layout.xml', matchNotice: '核对路径', message: '确认后保存', columns: [
+  { index: 0, field: 'A', header: '旧表头', width: 100, added: false, hidden: false },
+  { index: 1, field: '新增', header: '新增', width: 120, added: true, hidden: false }
+] });
 function mainHarness() {
   const calls = [], prompts = []; let response = 0;
   const dialog = {
@@ -27,6 +31,34 @@ function mainHarness() {
   } };
   return { controller, bridge, calls, prompts, revealed, files, choose: value => { response = value; } };
 }
+
+test('layout preview/save use trusted paths and validate preview token and settings', async () => {
+  const h = mainHarness();
+  const original = h.bridge.call;
+  h.bridge.call = async (method, args) => method === 'layoutPreview' ? layoutFixture() : original(method, args);
+  await h.controller.handle('sqlEditorOpen', { reportId: 'report' }, {}, h.bridge);
+  const payload = { reportId: 'report', token: 'opened', sourceIndex: 2, sql: 'select 1 A, 2 新增 from dual', values: {} };
+  await h.controller.handle('layoutPreview', payload, {}, h.bridge); h.controller.setDirty({ dirty: true });
+  const save = { ...payload, previewToken: 'preview', columns: layoutFixture().columns, path: 'FAKE', layoutPath: 'FAKE' };
+  for (const patch of [{ previewToken: 'stale' }, { sql: 'changed' }, { sourceIndex: 1 }, { columns: [] }, { columns: [{ index: 0, header: '', width: 0 }, save.columns[1]] }])
+    await assert.rejects(h.controller.handle('layoutSave', { ...save, ...patch }, {}, h.bridge));
+  assert.equal(h.prompts.length, 0);
+  assert.equal(await h.controller.handle('layoutSave', save, {}, h.bridge), null);
+  assert.equal(h.controller.dirty, true); assert.ok(h.controller.layout);
+  h.choose(1); await h.controller.handle('layoutSave', save, {}, h.bridge);
+  assert.match(h.prompts[1].detail, /C:\\reports\\layout.xml/); assert.ok(!h.prompts[1].detail.includes('FAKE'));
+  assert.equal(h.calls.at(-1).args.path, undefined); assert.equal(h.calls.at(-1).args.layoutPath, undefined);
+  assert.equal(h.controller.dirty, false); assert.equal(h.controller.layout, null);
+});
+
+test('layout write failure invalidates preview but keeps dirty draft', async () => {
+  const h = mainHarness(); await h.controller.handle('sqlEditorOpen', { reportId: 'report' }, {}, h.bridge);
+  const payload = { reportId: 'report', token: 'opened', sourceIndex: 2, sql: 'select 1 A, 2 新增 from dual' };
+  h.bridge.call = async method => { if (method === 'layoutPreview') return layoutFixture(); throw new Error('conflict'); };
+  await h.controller.handle('layoutPreview', payload, {}, h.bridge); h.controller.setDirty({ dirty: true }); h.choose(1);
+  await assert.rejects(h.controller.handle('layoutSave', { ...payload, previewToken: 'preview', columns: layoutFixture().columns }, {}, h.bridge));
+  assert.equal(h.controller.layout, null); assert.equal(h.controller.dirty, true);
+});
 
 test('reveal uses the Host source, ignores injected paths and preserves a dirty draft', async () => {
   const h = mainHarness(); await h.controller.handle('sqlEditorOpen', { reportId: 'report' }, {}, h.bridge);
@@ -113,7 +145,7 @@ function uiHarness() {
   const context = {
     document: { createElement: tag => new Element(tag), body: new Element('body') },
     $: selector => nodes.get(selector.slice(1)), busy: false, dead: false, selected: 'report',
-    currentReportSession: { source: 1 }, reports: [], detail: {},
+    currentReportSession: { source: 1 }, reports: [], detail: {}, values: () => ({ date: '2026-01-01' }),
     call: async (method, args = {}) => {
       calls.push({ method, args });
       if (method === 'sqlEditorOpen') return structuredClone(h.data);
@@ -125,6 +157,14 @@ function uiHarness() {
         return { saved: true, reloaded: true, editor: structuredClone(h.data), savedPath: h.data.path, message: '原 XML 已保存并重新加载' };
       }
       if (method === 'sqlEditorCheck') return { passed: true, missing: [], message: '静态检查通过' };
+      if (method === 'layoutPreview') return { ...layoutFixture(), reconciled: !!h.reconciled,
+        columns: layoutFixture().columns.map(c => ({ ...c, originalIndex: c.added ? -1 : c.index })) };
+      if (method === 'layoutSave') {
+        if (h.saveError) throw new Error('模板已被修改');
+        if (h.saveCancel) return null;
+        h.data.sources.find(s => s.index === args.sourceIndex).sql = args.sql; h.data.token = 'saved';
+        return { saved: true, reloaded: true, editor: structuredClone(h.data), savedPath: h.data.path, layoutPath: layoutFixture().layoutPath, message: '两份文件已保存并回读核对' };
+      }
       if (method === 'list') return [];
       return {};
     },
@@ -143,6 +183,28 @@ function uiHarness() {
   h.edit = async value => { const input = nodes.get('sql-editor-input'); input.value = value; input.oninput(); await Promise.resolve(); };
   return h;
 }
+test('close emblem has an accessible name and preserves unsaved-draft confirmation', async () => {
+  const h = uiHarness(); await h.open();
+  const close = h.nodes.get('sql-editor-close');
+  assert.equal(close['aria-label'], '关闭'); assert.equal(close.title, '关闭');
+  assert.equal(close.children[0].className, 'close-emblem');
+  assert.equal(close.children[0]['aria-hidden'], 'true');
+  await h.edit('select 42 from dual'); await close.onclick();
+  assert.equal(h.nodes.get('sql-editor').open, true);
+  h.discard = true; await close.onclick();
+  assert.equal(h.nodes.get('sql-editor').open, false);
+});
+test('editor places close in header, save after sync, and file path below toolbar', async () => {
+  const h = uiHarness(); await h.open();
+  const children = h.nodes.get('sql-editor').children;
+  assert.equal(children[0].className, 'sql-editor-header');
+  assert.deepEqual(children[0].children.map(n => n.id), ['sql-editor-title', 'sql-editor-close']);
+  assert.equal(children[1].className, 'sql-editor-selector');
+  assert.equal(children[2].id, 'sql-editor-path'); assert.equal(children[3].id, 'sql-editor-input');
+  assert.deepEqual(children[1].children[1].children.map(n => n.id), [
+    'sql-editor-copy', 'sql-editor-check', 'sql-editor-reload', 'sql-editor-reveal', 'sql-editor-sync', 'sql-editor-save'
+  ]);
+});
 test('editor uses XML ordinal rather than imported query ordinal', async () => {
   const h = uiHarness(); await h.open();
   assert.equal(h.nodes.get('sql-editor-source').value, '2'); assert.equal(h.nodes.get('sql-editor-input').value, 'select 2 from dual');
@@ -213,4 +275,59 @@ test('new assets are local and existing IPC origin validation still precedes edi
   assert.ok(main.includes("'/sql-editor.js'") && main.includes("'/sql-editor.css'"));
   assert.ok(html.indexOf('src="renderer.js"') < html.indexOf('src="sql-editor.js"'));
   assert.ok(html.includes("script-src 'self'") && !html.includes('unsafe-inline'));
+});
+
+test('layout UI previews aliases and returns without discarding SQL', async () => {
+  const h = uiHarness(); await h.open(); await h.edit('select 1 A, 2 新增 from dual');
+  await h.nodes.get('sql-editor-sync').onclick();
+  assert.equal(h.nodes.get('layout-editor').open, true);
+  assert.match(h.nodes.get('layout-editor-paths').textContent, /layout.xml/);
+  const body = h.nodes.get('layout-editor-table').children[1];
+  assert.equal(body.children[1].children[2].children[0].value, '新增');
+  assert.equal(h.calls.find(c => c.method === 'layoutPreview').args.values.date, '2026-01-01');
+  await h.nodes.get('layout-editor-cancel').onclick();
+  assert.equal(h.nodes.get('layout-editor').open, false);
+  assert.equal(h.nodes.get('sql-editor-input').value, 'select 1 A, 2 新增 from dual');
+  assert.equal(h.calls.some(c => c.method === 'layoutSave'), false);
+});
+
+test('saved SQL can open recovery preview while ordinary SQL save is disabled', async () => {
+  const h = uiHarness(); h.reconciled = true; await h.open();
+  const before = h.nodes.get('sql-editor-input').value;
+  assert.equal(h.nodes.get('sql-editor-save').disabled, true);
+  assert.equal(h.nodes.get('sql-editor-sync').disabled, false);
+  await h.nodes.get('sql-editor-sync').onclick();
+  assert.match(h.nodes.get('layout-editor-title').textContent, /SQL 已保存/);
+  const body = h.nodes.get('layout-editor-table').children[1];
+  assert.equal(body.children[0].children[4].textContent, '原第 1 列');
+  assert.equal(body.children[1].children[4].textContent, '新增');
+  await h.nodes.get('layout-editor-save').onclick();
+  assert.equal(h.calls.find(c => c.method === 'layoutSave').args.sql, before);
+  assert.equal(h.nodes.get('sql-editor-input').value, before);
+  assert.equal(h.nodes.get('layout-editor').open, false);
+});
+
+test('layout UI validates width and preserves preview after confirmation cancellation', async () => {
+  const h = uiHarness(); await h.open(); await h.nodes.get('sql-editor-sync').onclick();
+  const width = h.nodes.get('layout-editor-table').children[1].children[1].children[3].children[0];
+  width.value = '0'; await h.nodes.get('layout-editor-save').onclick();
+  assert.equal(h.calls.some(c => c.method === 'layoutSave'), false);
+  width.value = '180'; h.saveCancel = true; await h.nodes.get('layout-editor-save').onclick();
+  assert.equal(h.nodes.get('layout-editor').open, true); assert.match(h.nodes.get('layout-editor-status').textContent, /已取消保存/);
+});
+
+test('layout UI successful save reloads report and does not execute a data query', async () => {
+  const h = uiHarness(); await h.open(); await h.edit('select 1 A, 2 新增 from dual'); await h.nodes.get('sql-editor-sync').onclick();
+  await h.nodes.get('layout-editor-save').onclick();
+  assert.equal(h.nodes.get('layout-editor').open, false); assert.equal(h.nodes.get('sql-editor-save').disabled, true);
+  assert.match(h.nodes.get('sql-editor-status').textContent, /两份文件已保存/);
+  assert.equal(h.calls.some(c => c.method === 'query'), false); assert.equal(h.failures.length, 0);
+});
+
+test('layout UI failed write invalidates preview and keeps SQL draft', async () => {
+  const h = uiHarness(); await h.open(); await h.edit('select 1 A, 2 新增 from dual'); await h.nodes.get('sql-editor-sync').onclick();
+  h.saveError = true; await h.nodes.get('layout-editor-save').onclick();
+  assert.equal(h.nodes.get('layout-editor-save').disabled, true); assert.equal(h.nodes.get('layout-editor').open, true);
+  assert.equal(h.nodes.get('sql-editor-input').value, 'select 1 A, 2 新增 from dual');
+  assert.match(h.nodes.get('layout-editor-status').textContent, /重新同步/);
 });

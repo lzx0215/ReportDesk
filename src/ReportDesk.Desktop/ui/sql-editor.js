@@ -22,16 +22,37 @@
   const input = make('textarea', 'sql-editor-input');
   input.setAttribute('aria-label', '当前数据源的原文件 SQL'); input.spellcheck = false; input.wrap = 'off';
   const status = make('p', 'sql-editor-status', '', 'sql-editor-status'); status.setAttribute('role', 'status');
-  const hint = make('p', '', '保存直接覆盖原文件中当前数据源的 SQL，不生成备份。其他数据源不变，不执行查询。外部已打开的 XML 请重新加载后查看。', 'muted');
+  const hint = make('p', '', '保存到原 XML 仅覆盖当前 SQL，不生成备份。新增字段可点“同步报表列”；SQL 已保存时，会核对原表头后补齐模板。外部已打开的 XML 请重新加载后查看。', 'muted');
   const copy = make('button', 'sql-editor-copy', '复制 SQL');
   const check = make('button', 'sql-editor-check', '静态检查');
   const reload = make('button', 'sql-editor-reload', '重新加载当前报表');
   const reveal = make('button', 'sql-editor-reveal', '打开原报表位置');
+  const sync = make('button', 'sql-editor-sync', '同步报表列');
+  sync.title = '连接数据库识别字段，预览后同步保存 SQL 和报表模板';
   const save = make('button', 'sql-editor-save', '保存到原 XML', 'primary');
-  const close = make('button', 'sql-editor-close', '关闭');
-  const actions = make('div', '', undefined, 'sql-editor-actions'); actions.append(copy, check, reload, reveal, close, save);
+  const close = make('button', 'sql-editor-close', undefined, 'sql-editor-close-icon');
+  close.setAttribute('aria-label', '关闭'); close.title = '关闭';
+  const closeIcon = make('span', '', undefined, 'close-emblem');
+  closeIcon.setAttribute('aria-hidden', 'true'); close.append(closeIcon);
+  const header = make('div', '', undefined, 'sql-editor-header'); header.append(heading, close);
+  const actions = make('div', '', undefined, 'sql-editor-actions'); actions.append(copy, check, reload, reveal, sync, save);
   selector.append(actions);
-  dialog.append(heading, filePath, selector, input, dirtyLabel, status, hint); document.body.append(dialog);
+  dialog.append(header, selector, filePath, input, dirtyLabel, status, hint); document.body.append(dialog);
+  const layoutDialog = make('dialog', 'layout-editor', undefined, 'layout-editor');
+  layoutDialog.setAttribute('aria-labelledby', 'layout-editor-title');
+  const layoutTitle = make('h2', 'layout-editor-title', '同步报表列 · 保存前预览');
+  const layoutPaths = make('p', 'layout-editor-paths', '', 'sql-editor-status');
+  const layoutNotice = make('p', 'layout-editor-notice', '', 'muted');
+  const layoutStatus = make('p', 'layout-editor-status', '', 'sql-editor-status'); layoutStatus.setAttribute('role', 'status');
+  const tableWrap = make('div', '', undefined, 'layout-editor-table-wrap');
+  const table = make('table', 'layout-editor-table'); const head = make('thead'); const headRow = make('tr');
+  for (const title of ['位置', 'SQL 字段', '报表表头', '列宽', '状态']) headRow.append(make('th', '', title));
+  head.append(headRow); const body = make('tbody'); table.append(head, body); tableWrap.append(table);
+  const layoutCancel = make('button', 'layout-editor-cancel', '返回 SQL 编辑');
+  const layoutSave = make('button', 'layout-editor-save', '确认并保存两份 XML', 'primary');
+  const layoutActions = make('div', '', undefined, 'layout-editor-actions'); layoutActions.append(layoutCancel, layoutSave);
+  layoutDialog.append(layoutTitle, layoutPaths, layoutNotice, tableWrap, layoutStatus, layoutActions); document.body.append(layoutDialog);
+  let layoutPreview = null, layoutInputs = [];
   let session = null, sourceIndex = -1, baseline = '';
   const source = () => session?.sources.find(s => s.index === sourceIndex);
   const dirty = () => !!source()?.editable && input.value !== baseline;
@@ -45,6 +66,9 @@
     check.disabled = locked || !session?.token || !input.value || input.value.length > 1024 * 1024;
     reload.disabled = locked || !session || session.demo;
     reveal.disabled = locked || !session?.token || session.demo;
+    sync.disabled = locked || !source()?.editable || !input.value.trim() || input.value.length > 1024 * 1024;
+    layoutSave.disabled = locked || !layoutPreview;
+    layoutCancel.disabled = busy;
     save.disabled = locked || !source()?.editable || !dirty() || !input.value.trim() || input.value.length > 1024 * 1024;
     close.disabled = busy;
     dirtyLabel.textContent = input.value.length > 1024 * 1024 ? '超过编辑大小限制，请先复制保留 SQL' : dirty() ? '有未保存修改' : source()?.editable ? '与已读取文件一致' : '只读';
@@ -120,6 +144,51 @@
     await call('sqlEditorReveal', { reportId: session.reportId, token: session.token });
     status.textContent = '已请求在资源管理器中选中原 XML：' + session.path;
     progress('已打开原报表位置。');
+  });
+  sync.onclick = () => run('正在识别 SQL 字段并检查报表模板…', async () => {
+    layoutPreview = null;
+    const result = await call('layoutPreview', { ...args(), values: values() });
+    layoutPreview = result; layoutInputs = []; body.replaceChildren();
+    layoutTitle.textContent = result.reconciled ? '补齐报表列 · SQL 已保存' : '同步报表列 · 保存前预览';
+    layoutPaths.textContent = '查询：' + result.queryPath + '\n模板：' + result.layoutPath;
+    layoutNotice.textContent = result.matchNotice + '\n' + result.message;
+    for (const column of result.columns) {
+      const row = make('tr'); if (column.added) row.className = 'layout-added';
+      row.append(make('td', '', String(column.index + 1)), make('td', '', column.field));
+      const header = make('input'); header.type = 'text'; header.value = column.header; header.maxLength = 128;
+      header.setAttribute('aria-label', `第 ${column.index + 1} 列表头`);
+      const width = make('input'); width.type = 'number'; width.value = String(column.width); width.min = '24'; width.max = '1000'; width.step = '1';
+      width.setAttribute('aria-label', `第 ${column.index + 1} 列宽`);
+      const headerCell = make('td'), widthCell = make('td'); headerCell.append(header); widthCell.append(width);
+      row.append(headerCell, widthCell, make('td', '', column.added ? '新增' : result.reconciled ? `原第 ${column.originalIndex + 1} 列${column.hidden ? '（隐藏）' : ''}` : column.hidden ? '保留隐藏' : '已有')); body.append(row);
+      layoutInputs.push({ index: column.index, header, width, hidden: column.hidden });
+    }
+    layoutStatus.textContent = `识别到 ${result.columns.length} 列，新增 ${result.columns.filter(c => c.added).length} 列。表头、列宽可修改；如需调整位置，请返回修改 SQL 字段顺序后重新同步。`;
+    await markDirty(true); layoutDialog.showModal(); layoutCancel.focus();
+    progress('列预览已生成，尚未写入文件。');
+  });
+  layoutCancel.onclick = () => run('返回 SQL 编辑…', async () => {
+    layoutDialog.close(); layoutPreview = null; layoutInputs = []; body.replaceChildren();
+    await markDirty(dirty()); status.textContent = '已取消列预览，未写入文件；SQL 草稿仍保留。'; input.focus();
+  });
+  layoutDialog.addEventListener('cancel', event => { event.preventDefault(); if (!busy) layoutCancel.onclick(); });
+  layoutSave.onclick = () => run('请确认 SQL 与模板保存目标…', async () => {
+    if (!layoutPreview) return;
+    const columns = layoutInputs.map(c => ({ index: c.index, header: c.header.value, width: Number(c.width.value) }));
+    if (columns.some((c, i) => (!layoutInputs[i].hidden && !c.header.trim()) || c.header.length > 128 || !Number.isInteger(c.width) || c.width < 24 || c.width > 1000)) {
+      layoutStatus.textContent = '请检查表头和列宽：表头最多 128 字，列宽为 24–1000 的整数。'; return;
+    }
+    const index = sourceIndex;
+    let result;
+    try { result = await call('layoutSave', { ...args(), previewToken: layoutPreview.previewToken, columns }); }
+    catch (error) { layoutPreview = null; layoutStatus.textContent = error.message + '\n请返回 SQL 编辑并重新同步。'; clearResult(); throw error; }
+    if (!result) { layoutStatus.textContent = '已取消保存，列预览与 SQL 草稿仍保留。'; return; }
+    layoutDialog.close(); layoutPreview = null; body.replaceChildren(); layoutInputs = [];
+    load(result.editor, index); clearResult();
+    const message = result.message + '\n查询：' + result.savedPath + '\n模板：' + result.layoutPath;
+    try { await refreshSelected(source()?.queryIndex); status.textContent = message; }
+    catch { status.textContent = message + '\n界面更新失败。两份文件已保存，请重新加载，不要重复覆盖。'; }
+    progress('SQL 与报表模板已保存并回读核对。');
   });
   save.onclick = () => run('请确认保存目标…', async () => {
     const index = sourceIndex;

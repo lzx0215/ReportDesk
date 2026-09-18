@@ -25,6 +25,7 @@ internal static class LocalOracleChecks
     private static void Assert(bool value, string message) { if (!value) throw new InvalidOperationException(message); }
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && (args[0] == "--layout" || args[0] == "--layout-reconcile")) return LocalLayoutChecks.Run(args);
         if (args.Length < 2) { Console.WriteLine("Usage: <real-query.xml> <local-ObjectConfig.xml> [test-copy-directory]"); return 2; }
         var run = Path.GetFullPath(Path.Combine("artifacts/verification/desktop", "local-oracle-" + DateTime.Now.ToString("yyyyMMdd-HHmmss")));
         Directory.CreateDirectory(run); ErrorLog.Initialize(Path.Combine(run, "logs"));

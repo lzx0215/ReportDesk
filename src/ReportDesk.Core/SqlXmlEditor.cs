@@ -64,7 +64,7 @@ public static class SqlXmlEditor
         return Parse(path, bytes);
     }
 
-    private static SqlXmlSnapshot Parse(string path, byte[] bytes)
+    internal static SqlXmlSnapshot Parse(string path, byte[] bytes)
     {
         if (bytes.Length > MaxFileBytes) throw new InvalidOperationException("保存后 XML 将超过编辑大小限制。");
         using var input = new MemoryStream(bytes);
@@ -105,44 +105,23 @@ public static class SqlXmlEditor
 
     public static SqlXmlSaveResult Save(SqlXmlSnapshot opened, int sourceIndex, string sql, CancellationToken token = default)
     {
-        if (opened == null) throw new ArgumentNullException(nameof(opened));
-        if (string.IsNullOrWhiteSpace(sql)) throw new InvalidOperationException("SQL 不能为空；本版不删除数据源。");
-        if (sql.Length > MaxSqlCharacters) throw new InvalidOperationException("SQL 超过编辑大小限制。");
-        XmlConvert.VerifyXmlChars(sql);
-        token.ThrowIfCancellationRequested();
-        var current = Read(opened.Path);
-        if (current.Hash != opened.Hash) throw new InvalidOperationException("原 XML 已被修改。请先复制保留草稿，再重新读取文件后编辑；没有覆盖外部修改。");
-        var source = current.Sources.SingleOrDefault(s => s.Index == sourceIndex);
-        if (source == null || !source.Editable) throw new InvalidOperationException("该数据源不支持编辑；本版仅修改已有主表或明细 SQL。");
-        if (source.Sql == sql) return new SqlXmlSaveResult { Snapshot = current };
-        var element = current.Document.Root!.Element("QueryDataSource")!.Elements("QueryDataSource").ElementAt(sourceIndex).Element("Sql")!;
-        var span = FindSqlContent(current.Text, sourceIndex);
-        string content = element.Nodes().Any(n => n is XCData) && !sql.Contains("\r")
-            ? "<![CDATA[" + sql.Replace("]]>", "]]]]><![CDATA[>") + "]]>"
-            : sql.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\r", "&#xD;");
-        string updated = current.Text.Substring(0, span.Start) + content + current.Text.Substring(span.End);
-        var body = current.Encoding.GetBytes(updated); // Strict fallback: never replace unencodable characters with '?'.
-        var bytes = current.Bytes.Take(current.PreambleLength).Concat(body).ToArray();
-        var next = Parse(current.Path, bytes);
-        if (next.Sources[sourceIndex].Sql != sql) throw new InvalidOperationException("SQL 写出校验失败，未修改原文件。");
+        var next = Prepare(opened, sourceIndex, sql, token);
+        if (next.Hash == opened.Hash) return new SqlXmlSaveResult { Snapshot = next };
+        var current = opened;
+        var bytes = next.Bytes;
         var directory = System.IO.Path.GetDirectoryName(current.Path)!;
-        var suffix = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid().ToString("N");
-        var temporary = System.IO.Path.Combine(directory, ".reportdesk-" + suffix + ".tmp");
+        var temporary = System.IO.Path.Combine(directory, ".reportdesk-" + Guid.NewGuid().ToString("N") + ".tmp");
         try
         {
             using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             { output.Write(bytes, 0, bytes.Length); output.Flush(true); }
             token.ThrowIfCancellationRequested();
-            // Optimistic conflict check immediately before replacement, not a distributed file lock.
             if (Read(current.Path).Hash != current.Hash)
                 throw new InvalidOperationException("保存前原 XML 已发生变化；未覆盖，请保留草稿并重新读取。");
             token.ThrowIfCancellationRequested();
-            // Replace the original without creating a backup; stage first to avoid truncating it on write failure.
             File.Replace(temporary, current.Path, null, false);
-            // The commit point has passed. Do not report a later cancel as 'not saved'.
             try
             {
-                // Confirm the actual file, not just the in-memory bytes prepared for replacement.
                 var persisted = Read(current.Path);
                 if (persisted.Hash != next.Hash || persisted.Sources[sourceIndex].Sql != sql)
                     throw new IOException("保存后的磁盘内容与提交内容不一致。");
@@ -158,7 +137,33 @@ public static class SqlXmlEditor
         }
     }
 
-    private static void CheckPath(string path)
+    // Prepare without writing, so the coordinated SQL/layout save can validate both files first.
+    internal static SqlXmlSnapshot Prepare(SqlXmlSnapshot opened, int sourceIndex, string sql, CancellationToken token)
+    {
+        if (opened == null) throw new ArgumentNullException(nameof(opened));
+        if (string.IsNullOrWhiteSpace(sql)) throw new InvalidOperationException("SQL 不能为空；本版不删除数据源。");
+        if (sql.Length > MaxSqlCharacters) throw new InvalidOperationException("SQL 超过编辑大小限制。");
+        XmlConvert.VerifyXmlChars(sql);
+        token.ThrowIfCancellationRequested();
+        var current = Read(opened.Path);
+        if (current.Hash != opened.Hash) throw new InvalidOperationException("原 XML 已被修改。请先复制保留草稿，再重新读取文件后编辑；没有覆盖外部修改。");
+        var source = current.Sources.SingleOrDefault(s => s.Index == sourceIndex);
+        if (source == null || !source.Editable) throw new InvalidOperationException("该数据源不支持编辑；本版仅修改已有主表或明细 SQL。");
+        if (source.Sql == sql) return current;
+        var element = current.Document.Root!.Element("QueryDataSource")!.Elements("QueryDataSource").ElementAt(sourceIndex).Element("Sql")!;
+        var span = FindSqlContent(current.Text, sourceIndex);
+        string content = element.Nodes().Any(n => n is XCData) && !sql.Contains("\r")
+            ? "<![CDATA[" + sql.Replace("]]>", "]]]]><![CDATA[>") + "]]>"
+            : sql.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\r", "&#xD;");
+        string updated = current.Text.Substring(0, span.Start) + content + current.Text.Substring(span.End);
+        var body = current.Encoding.GetBytes(updated); // Strict fallback: never replace unencodable characters with '?'.
+        var bytes = current.Bytes.Take(current.PreambleLength).Concat(body).ToArray();
+        var next = Parse(current.Path, bytes);
+        if (next.Sources[sourceIndex].Sql != sql) throw new InvalidOperationException("SQL 写出校验失败，未修改原文件。");
+        return next;
+    }
+
+    internal static void CheckPath(string path)
     {
         if (!System.IO.Path.GetExtension(path).Equals(".xml", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("只允许编辑已导入的查询 XML 文件。");

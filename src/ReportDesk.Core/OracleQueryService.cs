@@ -11,6 +11,30 @@ namespace ReportDesk.Core;
 
 public static class OracleQueryService
 {
+    // Describe only: no Read(), no patient rows, and no result-name de-duplication.
+    public static string[] DescribeColumns(ConnectionSettings settings, string password, string template,
+        IReadOnlyDictionary<string, string> values, CancellationToken cancellation, IReadOnlyDictionary<string, string[]>? multiple = null)
+    {
+        var query = SqlTemplate.Compile(template, values, multiple);
+        using var connection = new OracleConnection(ConnectionString(settings, password));
+        cancellation.ThrowIfCancellationRequested(); connection.Open(); cancellation.ThrowIfCancellationRequested();
+        using var command = connection.CreateCommand();
+        command.CommandTimeout = 0;
+        using var registration = cancellation.Register(() => { try { command.Cancel(); } catch { /* cancellation best effort */ } });
+        try
+        {
+            command.CommandText = "SET TRANSACTION READ ONLY"; command.ExecuteNonQuery();
+            cancellation.ThrowIfCancellationRequested();
+            command.BindByName = true; command.CommandText = query.Sql;
+            foreach (var entry in query.Values)
+                command.Parameters.Add(entry.Key, OracleDbType.Varchar2, entry.Value.Length == 0 ? (object)DBNull.Value : entry.Value, ParameterDirection.Input);
+            using var reader = command.ExecuteReader(CommandBehavior.SchemaOnly);
+            var columns = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToArray();
+            cancellation.ThrowIfCancellationRequested();
+            return columns;
+        }
+        catch (Exception) when (cancellation.IsCancellationRequested) { throw new OperationCanceledException(cancellation); }
+    }
     // Explicit user action only. No report SQL, no persistence, no pooled session.
     public static string TestConnection(ConnectionSettings settings, string password)
     {

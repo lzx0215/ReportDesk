@@ -19,7 +19,7 @@ if (!lock) app.quit();
 else {
   app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
   app.whenReady().then(async () => {
-    const assets = new Set(['/index.html', '/styles.css', '/execution.css', '/query-form.js', '/renderer.js', '/sql-editor.js', '/sql-editor.css']);
+    const assets = new Set(['/index.html', '/styles.css', '/execution.css', '/query-form.js', '/renderer.js', '/sql-editor.js', '/sql-editor.css', '/close-emblem.svg']);
     const ses = session.fromPartition('reportdesk');
     ses.protocol.handle('reportdesk', request => {
       const url = new URL(request.url);
@@ -66,7 +66,7 @@ ipcMain.handle('reportdesk:call', async (event, method, args = {}) => {
   try {
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('参数格式无效。');
     let data;
-    if (['sqlEditorOpen', 'sqlEditorSave', 'sqlEditorDiscard', 'sqlEditorReveal'].includes(method)) data = await sqlEditor.handle(method, args, window, bridge);
+    if (['sqlEditorOpen', 'sqlEditorSave', 'sqlEditorDiscard', 'sqlEditorReveal', 'layoutPreview', 'layoutSave'].includes(method)) data = await sqlEditor.handle(method, args, window, bridge);
     else if (method === 'import') {
       const choice = await dialog.showOpenDialog(window, { title: args.folder ? '选择报表根目录或报表目录（自动识别并匹配 XML）' : '导入报表查询 XML', properties: args.folder ? ['openDirectory'] : ['openFile'], filters: [{ name: '报表 XML', extensions: ['xml'] }] });
       data = choice.canceled ? null : await bridge.call('import', { folder: !!args.folder, path: choice.filePaths[0] });

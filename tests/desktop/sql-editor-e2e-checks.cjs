@@ -36,6 +36,43 @@ let desktop;
   if (await page.locator('#query-conditions-view').isVisible()) await page.click('#conditions-dismiss');
   await page.click('#sql');
   await page.waitForFunction(() => document.querySelector('#sql-editor').open && !document.querySelector('#sql-editor-input').disabled);
+  const closeButton = page.getByRole('button', { name: '关闭', exact: true });
+  assert.equal(await closeButton.count(), 1);
+  const iconState = await page.locator('#sql-editor-close').evaluate(async button => {
+    const icon = button.querySelector('.close-emblem');
+    const image = new Image(); image.src = 'reportdesk://app/close-emblem.svg'; await image.decode();
+    const rect = button.getBoundingClientRect();
+    return { width: rect.width, height: rect.height, mask: getComputedStyle(icon).maskImage,
+      title: button.title, hidden: icon.getAttribute('aria-hidden') };
+  });
+  assert.ok(iconState.width >= 40 && iconState.height >= 40);
+  assert.match(iconState.mask, /close-emblem\.svg/); assert.equal(iconState.title, '关闭'); assert.equal(iconState.hidden, 'true');
+  await page.locator('#sql-editor').screenshot({ path: path.join(run, 'close-icon-default.png') });
+  await closeButton.hover(); await closeButton.screenshot({ path: path.join(run, 'close-icon-hover.png') });
+  for (const width of [1040, 1440, 1920]) {
+    await desktop.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, width === 1040 ? 700 : 930), width);
+    const positions = await page.evaluate(() => {
+      const box = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x:r.x, y:r.y, right:r.right, bottom:r.bottom }; };
+      return { header:box('.sql-editor-header'), close:box('#sql-editor-close'), toolbar:box('.sql-editor-selector'),
+        sync:box('#sql-editor-sync'), save:box('#sql-editor-save'), path:box('#sql-editor-path'), input:box('#sql-editor-input'),
+        noOverflow:document.querySelector('#sql-editor').scrollWidth <= document.querySelector('#sql-editor').clientWidth };
+    });
+    assert.ok(positions.noOverflow);
+    assert.ok(Math.abs(positions.close.right - positions.header.right) <= 1);
+    assert.ok(positions.close.bottom <= positions.toolbar.y);
+    assert.ok(positions.path.y >= positions.toolbar.bottom && positions.path.bottom <= positions.input.y);
+    if (Math.abs(positions.save.y - positions.sync.y) <= 1) assert.ok(positions.save.x - positions.sync.right <= 9);
+    else assert.ok(positions.save.y >= positions.sync.bottom, 'Save may wrap without overlapping sync');
+    await page.locator('#sql-editor').screenshot({ path:path.join(run, `toolbar-${width}.png`) });
+  }
+  await page.locator('#sql-editor-source').focus(); await page.keyboard.press('Shift+Tab');
+  assert.equal(await closeButton.evaluate(b => document.activeElement === b), true);
+  assert.equal(await closeButton.evaluate(b => getComputedStyle(b).outlineStyle), 'solid');
+  await closeButton.screenshot({ path: path.join(run, 'close-icon-focus.png') });
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => !document.querySelector('#sql-editor').open);
+  await page.click('#sql');
+  await page.waitForFunction(() => document.querySelector('#sql-editor').open && !document.querySelector('#sql-editor-input').disabled);
   const oldSql = await page.locator('#sql-editor-input').inputValue();
   const orderBy = /^(\s*)(--\s*)?(order\s+by\s+SORT_ID)\s*$/im;
   const draft = orderBy.test(oldSql)
@@ -51,6 +88,12 @@ let desktop;
   const sourcesBefore = await readSources(before);
   const selectedSource = Number(await page.locator('#sql-editor-source').inputValue());
   await page.locator('#sql-editor-input').fill(draft);
+  await desktop.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0 }); });
+  await page.click('#sql-editor-close'); await page.waitForFunction(() => !busy);
+  assert.equal(await page.locator('#sql-editor').evaluate(d => d.open), true);
+  assert.equal(await page.locator('#sql-editor-input').inputValue(), draft);
+  assert.deepEqual(fs.readFileSync(file), before, 'Cancelling close must preserve file and draft');
+  await desktop.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); });
   await page.click('#sql-editor-save');
   await page.waitForFunction(() => !busy);
   const status = await page.locator('#sql-editor-status').innerText();
@@ -72,6 +115,6 @@ let desktop;
   assert.deepEqual(fs.readFileSync(original), before, 'Original test repository must remain unchanged');
   assert.deepEqual(errors, []);
   await page.screenshot({ path: path.join(run, 'saved.png') });
-  fs.writeFileSync(path.join(run, 'PASS.txt'), 'PASS real Electron IPC, two overwrites, no backups or leftover temps, disk SQL verification, other data sources unchanged, reopen persisted SQL, original repository unchanged.\n');
+  fs.writeFileSync(path.join(run, 'PASS.txt'), 'PASS real Electron IPC, close SVG loaded through restricted protocol, 40px hit area, accessible name, hover/focus, keyboard close, dirty-close cancellation preserves file and draft, two overwrites, no backups or leftover temps, disk SQL verification, other data sources unchanged, reopen persisted SQL, original repository unchanged.\n');
   console.log('PASS ' + run);
 })().catch(e => { console.error(e); process.exitCode = 1; }).finally(async () => { if (desktop) await desktop.close(); });

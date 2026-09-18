@@ -29,6 +29,29 @@ dotnet run --project tests/ReportDesk.LocalOracle.Checks/ReportDesk.LocalOracle.
 
 本轮针对用户反馈的报表，可将以上命令中的 XML 改为 `E:/his/LIB/Config/Xml/普通会诊及时完成率查询设置.xml`。Oracle 检查只为当前主表需要的日期条件赋值，明细的其他参数不参与主表测试。
 
-## 已知回归边界
+## 报表列同步验证
 
-`tests/ReportDesk.Checks` 的旧 HIS 适配断言已在合并前 `67ac5cf` 上复现失败（`HisAdapterChecks.cs` 中 plain AddMap 检查）。SQL 编辑专项通过不能替代这一综合套件的全量通过。该旧问题不在本轮修复范围。
+```powershell
+dotnet build src/ReportDesk.Host/ReportDesk.Host.csproj -c Release -o artifacts/host
+dotnet run --project tests/ReportDesk.SqlEditing.Checks/ReportDesk.SqlEditing.Checks.csproj -c Release
+node --test tests/desktop/sql-editor-checks.cjs
+dotnet run --project tests/ReportDesk.LocalOracle.Checks/ReportDesk.LocalOracle.Checks.csproj -c Release -- --layout 'E:/his/LIB/Config/Xml/(病案)观察室工作日志查询设置.xml' E:/his/LIB/Conf/ObjectConfig.xml E:/his/local_sandbox/reportdesk-layout-editing
+node tests/desktop/layout-editor-e2e-checks.cjs 'D:/aiproject/ReportDesk/artifacts/layout-reconcile/ReportDesk-win32-x64/ReportDesk.exe'
+```
+
+端到端测试需要已经打包的新 EXE；可依次追加真实查询 XML、已有本机 ObjectConfig.xml 路径。它启动独立数据目录的测试窗口，不使用/关闭用户当前窗口。测试凭据仅留在内存，强制 loopback，`remember=false`。模板列预览只读数据库结构；测试保存只覆盖副本，原库两个 XML 字节保持不变。完整支持范围及不支持案例见 [报表列同步](ReportLayoutEditing.md)。
+
+### SQL 已保存、模板待补齐
+
+下列命令针对当前「(病案)观察室工作日志」的 6 个 SQL 字段、5 列模板测试副本。保留现有 SQL 和统计逻辑，仅补齐模板；核对查询 XML 字节和修改时间均不变，再次同步不会重复加列。
+
+```powershell
+dotnet run --project tests/ReportDesk.LocalOracle.Checks/ReportDesk.LocalOracle.Checks.csproj -c Release -- --layout-reconcile 'E:/his/LIB/Config/Xml/(病案)观察室工作日志查询设置.xml' E:/his/LIB/Conf/ObjectConfig.xml E:/his/local_sandbox/reportdesk-layout-editing
+node tests/desktop/layout-editor-e2e-checks.cjs 'D:/aiproject/ReportDesk/artifacts/layout-reconcile/ReportDesk-win32-x64/ReportDesk.exe' 'E:/his/LIB/Config/Xml/(病案)观察室工作日志查询设置.xml' E:/his/LIB/Conf/ObjectConfig.xml --reconcile
+```
+
+此模式只识别数据库字段，不执行患者明细查询。仍只写隔离副本；真实 HIS 显示、明细跳转、打印和业务口径须另外验收。
+
+## 综合回归边界
+
+`tests/ReportDesk.Checks` 的旧 HIS 适配断言已在合并前 `67ac5cf` 上复现失败（`HisAdapterChecks.cs` 中 plain AddMap 检查），本次也从 `166c6a9` 导出隔离源码复现。SQL/模板编辑专项通过不能替代这一综合套件的全量通过。该旧问题不在本轮修复范围。

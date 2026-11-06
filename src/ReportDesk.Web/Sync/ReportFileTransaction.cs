@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Xml;
 using System.Xml.Serialization;
+using ReportDesk.Core;
 
 namespace ReportDesk.Web.Sync
 {
@@ -29,6 +30,21 @@ namespace ReportDesk.Web.Sync
             }
         }
 
+        // Single XML edit: record the expected written bytes before mutation. If an
+        // external program changes the target to any other bytes, never restore
+        // over them; preserve the journal for manual reconciliation.
+        public void ExecuteProtectedXmlEdit(string relativePath, string expectedNewHash, Action mutation, Action reload,
+            CancellationToken cancellation = default(CancellationToken))
+        {
+            if (string.IsNullOrEmpty(expectedNewHash) || expectedNewHash.Length != 64 || expectedNewHash.Any(c => !Uri.IsHexDigit(c)))
+                throw new InvalidOperationException("XML 保存预期哈希无效。");
+            using (work.Acquire(cancellation))
+            {
+                RecoverUnderLock(reload);
+                ExecuteUnderLock(new[] { relativePath }, mutation, reload, expectedNewHash: expectedNewHash);
+            }
+        }
+
         public void Recover(Action reload, CancellationToken cancellation = default(CancellationToken))
         { using (work.Acquire(cancellation)) RecoverUnderLock(reload); }
 
@@ -37,18 +53,20 @@ namespace ReportDesk.Web.Sync
         public void RecoverFiles(CancellationToken cancellation = default(CancellationToken))
         { Recover(() => { }, cancellation); }
 
-        internal void ExecuteUnderLock(IEnumerable<string> relativePaths, Action mutation, Action reload, Action precondition = null)
+        internal void ExecuteUnderLock(IEnumerable<string> relativePaths, Action mutation, Action reload, Action precondition = null, string expectedNewHash = null)
         {
             if (RequiresRecovery) throw new SyncSafetyException("RecoveryRequired");
             var paths = relativePaths.Select(ReportWorkDirectory.Normalize).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             if (paths.Length == 0) throw new SyncSafetyException("EmptyTransaction");
             var journal = new FileTransactionJournal { Id = Guid.NewGuid().ToString("N") };
+            if (expectedNewHash != null && paths.Length != 1) throw new InvalidOperationException("XML 编辑只能包含一个目标文件。");
             string backupRoot = Path.Combine(work.StateRoot, journal.Id);
             ReportWorkDirectory.CheckLinks(backupRoot); Directory.CreateDirectory(backupRoot);
             foreach (var path in paths)
             {
                 string full = work.Resolve(path);
-                var item = new FileTransactionEntry { Path = path, Existed = File.Exists(full), Backup = journal.Entries.Count.ToString() + ".bin" };
+                var item = new FileTransactionEntry { Path = path, Existed = File.Exists(full), Backup = journal.Entries.Count.ToString() + ".bin", ExpectedNewHash = expectedNewHash };
+                if (expectedNewHash != null && !item.Existed) throw new InvalidOperationException("XML 目标文件已不存在。");
                 if (item.Existed)
                 {
                     var bytes = File.ReadAllBytes(full); item.Hash = ReportWorkDirectory.Hash(bytes);
@@ -65,8 +83,9 @@ namespace ReportDesk.Web.Sync
                 mutation(); reload();
                 journal.Committed = true; XmlDisk.Save(JournalPath, journal);
             }
-            catch
+            catch (Exception ex)
             {
+                ErrorLog.Write("ReportTransactionEdit", ex, includeMessage: false);
                 try { RecoverUnderLock(reload); }
                 catch { throw new SyncSafetyException("RecoveryRequired"); }
                 throw new SyncSafetyException("TransactionRolledBack");
@@ -92,6 +111,17 @@ namespace ReportDesk.Web.Sync
                     if (e.Backup != journal.Entries.IndexOf(e).ToString() + ".bin") throw new SyncSafetyException("RecoveryRequired");
                     if (!journal.Committed && e.Existed && ReportWorkDirectory.HashFile(BackupPath(journal, e)) != e.Hash)
                         throw new SyncSafetyException("RecoveryRequired");
+                    if (!journal.Committed && !string.IsNullOrEmpty(e.ExpectedNewHash))
+                    {
+                        // Validate the complete recovery set before touching any
+                        // target. Missing files or unknown bytes may be an external edit.
+                        if (!e.Existed || e.ExpectedNewHash.Length != 64 || e.ExpectedNewHash.Any(c => !Uri.IsHexDigit(c)))
+                            throw new SyncSafetyException("RecoveryRequired");
+                        var currentHash = ReportWorkDirectory.HashFile(work.Resolve(e.Path));
+                        if (!string.Equals(currentHash, e.Hash, StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(currentHash, e.ExpectedNewHash, StringComparison.OrdinalIgnoreCase))
+                            throw new SyncSafetyException("RecoveryRequired");
+                    }
                 }
                 if (!journal.Committed)
                     foreach (var e in journal.Entries)
@@ -99,6 +129,10 @@ namespace ReportDesk.Web.Sync
                         string full = work.Resolve(e.Path);
                         if (e.Existed)
                         {
+                            // A denied save may not have changed the original at all. Replacing
+                            // those bytes again can fail for the same reason and poison startup.
+                            // All backups were validated above; only changed/missing targets need writes.
+                            if (ReportWorkDirectory.HashFile(full) == e.Hash) continue;
                             Directory.CreateDirectory(Path.GetDirectoryName(full));
                             ReportWorkDirectory.AtomicWrite(full, File.ReadAllBytes(BackupPath(journal, e)));
                         }
@@ -107,7 +141,11 @@ namespace ReportDesk.Web.Sync
                 reload(); // If this fails leave the marker and refuse to open definitions.
                 Cleanup(journal);
             }
-            catch { throw new SyncSafetyException("RecoveryRequired"); }
+            catch (Exception ex)
+            {
+                ErrorLog.Write("ReportTransactionRecovery", ex, includeMessage: false);
+                throw new SyncSafetyException("RecoveryRequired");
+            }
         }
 
         private string BackupPath(FileTransactionJournal journal, FileTransactionEntry entry)
@@ -142,6 +180,7 @@ namespace ReportDesk.Web.Sync
         public string Backup { get; set; } = "";
         public bool Existed { get; set; }
         public string Hash { get; set; } = "";
+        public string ExpectedNewHash { get; set; } = "";
     }
     internal static class XmlDisk
     {

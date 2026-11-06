@@ -46,12 +46,13 @@ async function stop(){const done=once(b.process,'exit');b.close();await done;b=n
  await page.waitForFunction(()=>document.querySelector('#operation-status').textContent==='准备就绪。');
  assert.equal(await page.locator('.report-item').count(),2);
  await page.fill('#report-search','测试入口乙');await page.waitForFunction(()=>document.querySelectorAll('.report-item').length===1);
+ await page.locator('.report-item').click();
  await page.waitForFunction(()=>document.querySelector('#report-title').textContent==='示例报表');
  assert.equal(await page.locator('#report-locations p').count(),3);assert.equal(await page.locator('#query').isDisabled(),true);
  await page.screenshot({path:path.join(run,'locations.png')});
  await page.click('#metadata-open');assert.match(await page.locator('#meta-guidance').innerText(),/纯 AddMap 结果映射已支持/);assert.match(await page.locator('#meta-locations').innerText(),/用户提供/);assert.match(await page.locator('#meta-locations').innerText(),/测试入口乙/);
  await page.screenshot({path:path.join(run,'guidance.png')});await page.click('[data-close="metadata"]');
- await page.fill('#report-search','配置');await page.waitForFunction(()=>document.querySelector('#report-title').textContent==='配置');assert.match(await page.locator('#report-locations').innerText(),/位置未确认/);
+ await page.fill('#report-search','配置');await page.waitForFunction(()=>document.querySelectorAll('.report-item').length===1);await page.locator('.report-item').click();await page.waitForFunction(()=>document.querySelector('#report-title').textContent==='配置');assert.match(await page.locator('#report-locations').innerText(),/位置未确认/);
  assert.equal(await page.locator('#progress').evaluate(el=>getComputedStyle(el).height),'10px');
  await desktop.close();desktop=null;
  fs.writeFileSync(path.join(run,'PASS.txt'),'PASS content classification, incomplete legacy entries preserved/hidden, pending guard, multiple paths, unknown locations, menu search, advice and original 10px progress bar.\n');console.log('PASS catalog checks: '+run);

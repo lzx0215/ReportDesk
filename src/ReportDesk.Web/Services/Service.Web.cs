@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Web.Script.Serialization;
@@ -51,6 +52,31 @@ internal sealed partial class Service
 
     internal Service WebCreateContext() => new(this);
 
+    // A browser-owned directory shares the server connection configuration, never
+    // the public catalog or remembered import roots. No credentials are copied to disk.
+    internal Service WebCreateLocal(string root, Action<string> checkPath, CancellationToken token)
+    {
+        var local = new Service(this);
+        local.catalog.Reports.Clear();
+        local.webRelated.Clear(); local.importRoots.Clear(); local.reloadRequired.Clear();
+        local.startupWarnings.Clear();
+        local.webValidatePath = checkPath; local.webRoot = root;
+        checkPath(root);
+        var imported = ReportImporter.ImportFolder(root, token);
+        local.MergeImport(imported);
+        if (imported.Errors.Count > 0) local.startupWarnings.Add("部分本机 XML 无法识别，请检查目录扫描结果。");
+        return local;
+    }
+
+    internal IReadOnlyList<string> WebReportFiles(Dictionary<string, object> args)
+    {
+        var report = Report(args);
+        var paths = new List<string> { report.SourcePath };
+        if (webRelated.TryGetValue(report.Id, out var related))
+            paths.AddRange(related.SelectMany(f => f.Paths).Where(File.Exists));
+        return paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
     // Definitions are immutable once published. Merge replaces objects, never edits
     // published ones. Each Service owns its list and all query/lookup/editor state.
     internal void WebRefresh(Service shared)
@@ -92,22 +118,21 @@ internal sealed partial class Service
             ErrorLog.Write("WebReadSources", ex, includeMessage: false);
             startupWarnings.Add("已保存的导入来源无法读取，请在维护页检查配置。");
         }
-        if (sources.Count == 0) sources.Add(new ImportSource { Path = root, Folder = true });
+        // The configured root is authoritative. Old remembered subfolders must
+        // neither narrow this scan nor bring files from a former root back in.
         foreach (var source in sources)
         {
-            try
-            {
-                checkPath(source.Path);
-                var imported = source.Folder ? ReportImporter.ImportFolder(source.Path) : ReportImporter.ImportWithRelated(source.Path);
-                MergeImport(imported);
-                if (imported.Errors.Count > 0) startupWarnings.Add("部分报表来源读取失败，请在维护页检查。");
-            }
+            try { checkPath(source.Path); }
             catch (Exception ex)
             {
                 ErrorLog.Write("WebRestoreSource", ex, includeMessage: false);
-                startupWarnings.Add("部分报表来源不可访问或不在受控目录内，已保留配置。");
+                startupWarnings.Add("旧导入来源不在当前报表目录内，已忽略并保留配置；当前按配置的报表根目录加载。");
             }
         }
+        checkPath(root);
+        var imported = ReportImporter.ImportFolder(root);
+        MergeImport(imported);
+        if (imported.Errors.Count > 0) startupWarnings.Add("部分报表来源读取失败，请在维护页检查。");
         sourcesRestored = true;
     }
 
@@ -126,6 +151,14 @@ internal sealed partial class Service
         if (layoutPlan != null) checkPath(layoutPlan.Path);
     }
 
+    internal (string Name, string Path) WebPublishSource(Dictionary<string, object> args)
+    {
+        var report = Report(args);
+        if (report.IsDemo) throw new InvalidOperationException("示例报表不能用于发布准备。");
+        webValidatePath?.Invoke(report.SourcePath);
+        return (WebMetadataText(report.Name), report.SourcePath);
+    }
+
     internal void WebValidateAllReports(Action<string> checkPath)
     {
         foreach (var r in catalog.Reports.Where(r => !r.IsDemo)) checkPath(r.SourcePath);
@@ -138,6 +171,7 @@ internal sealed partial class Service
         catalog.Connection = json.Deserialize<ConnectionSettings>(json.Serialize(settings));
         catalog.Connection.ProtectedPassword = "";
         password = secret ?? "";
+        WebUpdateInjectedProfile();
     }
 
     internal ReportDesk.Web.Services.WebConnectionSnapshot WebGetConnection()
@@ -178,6 +212,15 @@ internal sealed partial class Service
 
     private string[] WebIssues(IEnumerable<string> issues) => issues.Select(i => AdaptationGuidance.For(i).Title).Distinct().ToArray();
 
+    // Browser paths are identifiers only; never open them on the server. An empty
+    // ID intentionally prevents matching server-path-derived report IDs.
+    internal object WebLocalLocations(IReadOnlyList<Tuple<string, string>> items) => new {
+        items = items.Select(item => new { path = item.Item1,
+            locations = locations.For(new ReportDefinition { Id = "", SourcePath = item.Item1, SourceHash = item.Item2 })
+                .Select(l => new { Path = WebMetadataText(l.Path), Evidence = WebMetadataText(l.Evidence), l.Match, l.Candidate, l.Active }).ToArray() }).ToArray(),
+        warnings = locations.Warnings.Select(WebMetadataText).ToArray()
+    };
+
     private object WebList() => Visible().Select(r => new {
         id = r.Id, name = WebMetadataText(r.Name), aliases = WebMetadataText(r.Aliases), notes = WebMetadataText(r.Notes),
         locations = locations.For(r).Select(l => new { Path = WebMetadataText(l.Path), Evidence = WebMetadataText(l.Evidence), l.Match, l.Candidate, l.Active }).ToArray(),
@@ -197,6 +240,7 @@ internal sealed partial class Service
         dto["definitionHash"] = r.SourceHash;
         dto["issues"] = WebIssues(r.Issues);
         var index = Convert.ToInt32(dto["source"]);
+        dto["headerPreview"] = json.Deserialize<object>(json.Serialize(WebHeaderPreview(r, index)));
         dto["selectedIssues"] = reloadRequired.Contains(r.Id) ? new[] { ReloadRequiredMessage } :
             WebIssues(r.Queries.Count > 0 ? ReportReadiness.IssuesFor(r, r.Queries[index]) : r.Issues);
         dto["sources"] = r.Queries.Select((q, i) => new { q, i }).Where(x => x.q.Kind != "ConditionUsing")
@@ -277,14 +321,84 @@ internal sealed partial class Service
         catch (InvalidOperationException ex) { throw new ReportDesk.Web.WebUserException(WebMetadataText(ex.Message)); }
     }
 
+    internal ReportDesk.Web.SqlExportResult WebExportSql(Dictionary<string, object> args, CancellationToken token, Action<string> progress)
+    {
+        var reportId = Text(args, "reportId");
+        ReportDefinition[] reports;
+        bool selected = args.TryGetValue("reportIds", out var rawIds);
+        if (selected)
+        {
+            // An explicit selection must never fall back to the all-reports path.
+            if (args.ContainsKey("reportId") || !(rawIds is IList ids) || ids.Count == 0)
+                throw new ReportDesk.Web.WebUserException("请选择要导出的报表。");
+            var visible = new Dictionary<string, ReportDefinition>(StringComparer.Ordinal);
+            foreach (var report in Visible().Where(r => !r.IsDemo))
+                if (!visible.ContainsKey(report.Id)) visible.Add(report.Id, report);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var chosen = new List<ReportDefinition>();
+            foreach (var value in ids)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!(value is string id) || string.IsNullOrWhiteSpace(id) || !seen.Add(id) || !visible.TryGetValue(id, out var report))
+                    throw new ReportDesk.Web.WebUserException("所选报表无效或已不在显示清单内，请刷新后重新选择。");
+                chosen.Add(report);
+            }
+            reports = chosen.ToArray();
+        }
+        else reports = reportId.Length == 0 ? Visible().Where(r => !r.IsDemo).ToArray() : new[] { Report(args) };
+        if (reports.Length == 0 || reports.Any(r => r.IsDemo))
+            throw new ReportDesk.Web.WebUserException("没有可导出的报表。请检查报表目录或选择有效报表。");
+        var output = new StringBuilder();
+        for (var i = 0; i < reports.Length; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            var report = reports[i];
+            progress("正在读取报表 SQL（" + (i + 1) + "/" + reports.Length + "）…");
+            var failure = "来源文件无法读取或路径不安全";
+            try
+            {
+                webValidatePath?.Invoke(report.SourcePath);
+                var snapshot = SqlXmlEditor.Read(report.SourcePath);
+                failure = "报表定义已变化，请重新加载";
+                if (snapshot.Hash != report.SourceHash)
+                    throw new InvalidOperationException("报表定义已发生变化。");
+                failure = "无法整理查询数据源";
+                var sources = snapshot.Sources.Where(s => !string.IsNullOrWhiteSpace(s.Sql) && s.Kind != "ConditionUsing").ToArray();
+                if (output.Length > 0) output.Append("\r\n\r\n");
+                output.Append(report.Name).Append("：\r\n");
+                if (sources.Length == 0) output.Append("-- 此报表没有主查询、明细或其他非条件数据源 SQL。\r\n");
+                foreach (var source in sources)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (sources.Length > 1) output.Append("-- 数据源：").Append(source.Name).Append("（").Append(source.Kind).Append("）\r\n");
+                    output.Append(source.Sql);
+                    if (!ReferenceEquals(source, sources[sources.Length - 1])) output.Append("\r\n\r\n");
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception)
+            {
+                // Do not expose a path, XML or SQL via the error or log. Do not
+                // return a partial export when any source cannot be read.
+                throw new ReportDesk.Web.WebUserException("报表“" + WebMetadataText(report.Name) + "”导出失败：" + failure + "；未生成部分文件。");
+            }
+        }
+        token.ThrowIfCancellationRequested();
+        var encoding = new UTF8Encoding(true);
+        var body = encoding.GetBytes(output.ToString());
+        var bom = encoding.GetPreamble();
+        var bytes = new byte[bom.Length + body.Length];
+        Buffer.BlockCopy(bom, 0, bytes, 0, bom.Length);
+        Buffer.BlockCopy(body, 0, bytes, bom.Length, body.Length);
+        return new ReportDesk.Web.SqlExportResult(bytes, (selected || reportId.Length != 0) && reports.Length == 1 ? reports[0].Name : "");
+    }
+
     internal object WebAdminHandle(string method, Dictionary<string, object> args, CancellationToken token, Action<string> progress)
     {
         switch (method)
         {
             case "checkNewReports":
-                if (sourcesStore.Load().Count > 0) return Handle(method, args, token, progress);
-                // The configured root is the default source even before an admin
-                // has explicitly persisted any additional import sources.
+                // Always discover throughout the configured root, including after migration.
                 var discovered = ReportImporter.ImportFolder(webRoot, token, progress);
                 var existing = new HashSet<string>(catalog.Reports.Select(r => r.Id), StringComparer.OrdinalIgnoreCase);
                 discovered.Reports.RemoveAll(r => !existing.Add(r.Id));
@@ -308,7 +422,11 @@ internal sealed partial class Service
                 return TnsDiscovery.FindFiles(new[] { configDirectory, Path.Combine(configDirectory, "network", "admin") })
                     .Where(p => { try { ReportDesk.Web.Services.WebBackend.ValidatePath(p, configDirectory); return true; } catch { return false; } })
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            case "settings": case "saveSettings": case "testConnection": case "tnsAliases":
+            case "xmlEditorOpen": case "xmlEditorCheck": case "xmlEditorSave":
+                return HandleWebXmlEditing(method, args, token, progress);
+            case "settings": case "saveSettings": case "testConnection": case "activateConnection":
+                return WebHandleConnectionProfiles(method, args, token, progress);
+            case "tnsAliases":
             case "import": case "relatedFiles":
             case "sqlEditorOpen": case "sqlEditorCheck": case "sqlEditorSave": case "reloadReport": case "layoutPreview": case "layoutSave":
                 return Handle(method, args, token, progress);

@@ -13,6 +13,7 @@ public sealed class WebOptions
     public string[] MaintenanceAddresses { get; set; } = Array.Empty<string>();
     public string[] TnsFiles { get; set; } = Array.Empty<string>();
     public bool Offline { get; set; } = true;
+    public bool ServerReportsEnabled { get; set; }
     public bool SyncEnabled { get; set; }
     public bool SyncSampleValidated { get; set; }
     public bool AllowLoopbackHttp { get; set; }
@@ -20,7 +21,9 @@ public sealed class WebOptions
     public int MaxConcurrentOperations { get; set; } = 3;
     public int IdleMinutes { get; set; } = 60;
     public int MaxSessions { get; set; } = 64;
-    public string ReportsDirectory => Path.Combine(DataDirectory, "Reports");
+    private string reportsDirectory = "";
+    // Used only when server reports are explicitly enabled. Local mode ignores it.
+    public string ReportsDirectory { get => string.IsNullOrWhiteSpace(reportsDirectory) ? Path.Combine(DataDirectory, "Reports") : reportsDirectory; set => reportsDirectory = value; }
     public const int MaxRequestBytes = 8 * 1024 * 1024;
 
     public static WebOptions Load(string site)
@@ -30,10 +33,10 @@ public sealed class WebOptions
         int Number(string key, int fallback) => int.TryParse(Read(key), out var value) ? value : fallback;
         string[] List(string key) => Read(key).Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => s.Length > 0).ToArray();
         return new WebOptions {
-            SiteDirectory = site, DataDirectory = Read("DataDirectory"),
+            SiteDirectory = site, DataDirectory = Read("DataDirectory"), ReportsDirectory = Read("ReportsDirectory"),
             MaintenanceAddresses = List("MaintenanceAddresses"),
             TnsFiles = List("TnsFiles"),
-            Offline = Flag("Offline", true), SyncEnabled = Flag("SyncEnabled", false),
+            Offline = Flag("Offline", true), ServerReportsEnabled = Flag("ServerReportsEnabled", false), SyncEnabled = Flag("SyncEnabled", false),
             SyncSampleValidated = Flag("SyncSampleValidated", false),
             AllowLoopbackHttp = Flag("AllowLoopbackHttp", false),
             SyncSeconds = Number("SyncSeconds", 30),
@@ -49,14 +52,32 @@ public sealed class WebOptions
         SiteDirectory = Path.GetFullPath(SiteDirectory).TrimEnd(Path.DirectorySeparatorChar);
         if (Inside(DataDirectory, SiteDirectory) || Inside(SiteDirectory, DataDirectory) || DataDirectory == Path.GetPathRoot(DataDirectory)?.TrimEnd('\\'))
             throw new InvalidOperationException("数据目录必须与网站目录分离，且不能是磁盘根目录。");
-        if (IdleMinutes < 1 || MaxSessions < 1 || MaxConcurrentOperations < 1 || SyncSeconds < 5)
+        if (ServerReportsEnabled)
+        {
+            bool explicitReports = !string.IsNullOrWhiteSpace(reportsDirectory);
+            if (!Path.IsPathRooted(ReportsDirectory)) throw new InvalidOperationException("ReportDesk.ReportsDirectory 必须是服务器绝对路径。");
+            var reportRoot = Path.GetFullPath(ReportsDirectory).TrimEnd('\\', '/');
+            if (reportRoot == Path.GetPathRoot(reportRoot)?.TrimEnd('\\', '/') ||
+                Inside(reportRoot, SiteDirectory) || Inside(SiteDirectory, reportRoot) || Inside(DataDirectory, reportRoot) ||
+                new[] { "config", "Logs", "SyncState", "LocalWorkspaces" }.Any(name => Inside(reportRoot, Path.Combine(DataDirectory, name)) || Inside(Path.Combine(DataDirectory, name), reportRoot)))
+                throw new InvalidOperationException("报表目录不能是磁盘根目录，也不能与网站、配置、日志、同步状态或本机临时工作区重叠。");
+            EnsureNoLinks(reportRoot);
+            if (explicitReports && !Directory.Exists(reportRoot))
+                throw new InvalidOperationException("ReportDesk.ReportsDirectory 指定的报表目录不存在或不可访问，请核对服务器路径和应用池权限。");
+            if (explicitReports) reportsDirectory = reportRoot;
+        }
+        if (IdleMinutes < 1 || MaxSessions < 1 || MaxConcurrentOperations < 1 || (ServerReportsEnabled && SyncSeconds < 5))
             throw new InvalidOperationException("Web 容量和同步配置无效。");
         foreach (var address in MaintenanceAddresses)
             if (!IPAddress.TryParse(address, out _)) throw new InvalidOperationException("维护白名单必须使用明确 IP 地址。");
-        if (Offline && SyncEnabled) throw new InvalidOperationException("离线模式不允许启用数据库自动同步。");
-        EnsureNoLinks(DataDirectory); EnsureNoLinks(ReportsDirectory);
+        if (ServerReportsEnabled && Offline && SyncEnabled) throw new InvalidOperationException("离线模式不允许启用数据库自动同步。");
+        EnsureNoLinks(DataDirectory);
         Directory.CreateDirectory(DataDirectory);
-        Directory.CreateDirectory(ReportsDirectory);
+        if (ServerReportsEnabled)
+        {
+            EnsureNoLinks(ReportsDirectory);
+            Directory.CreateDirectory(ReportsDirectory);
+        }
     }
 
     internal static bool Inside(string path, string root) => string.Equals(path, root, StringComparison.OrdinalIgnoreCase) ||
@@ -80,6 +101,7 @@ public sealed class WebOptions
 
     public string ResolveReportPath(string relative)
     {
+        RequireServerReports();
         var text = NormalizeReportRelative(relative);
         var full = text.Length == 0 ? Path.GetFullPath(ReportsDirectory) : Path.GetFullPath(Path.Combine(ReportsDirectory, text.Replace('/', Path.DirectorySeparatorChar)));
         if (!Inside(full, ReportsDirectory) && !string.Equals(full, ReportsDirectory, StringComparison.OrdinalIgnoreCase))
@@ -99,6 +121,7 @@ public sealed class WebOptions
 
     public string MapInsideReports(string relative)
     {
+        RequireServerReports();
         var text = NormalizeReportRelative(relative);
         var full = text.Length == 0
             ? Path.GetFullPath(ReportsDirectory)
@@ -106,6 +129,12 @@ public sealed class WebOptions
         if (!Inside(full, ReportsDirectory) && !string.Equals(full, Path.GetFullPath(ReportsDirectory), StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("报表路径超出允许范围。");
         return full;
+    }
+
+    internal const string ServerReportsDisabledMessage = Services.WebBackend.ServerReportsDisabledMessage;
+    internal void RequireServerReports()
+    {
+        if (!ServerReportsEnabled) throw new WebUserException(ServerReportsDisabledMessage);
     }
 
     public bool IsMaintenance(string address)

@@ -8,7 +8,7 @@
 
 1. 在维护窗口备份当前网站完整目录、Web.config，以及站点外的数据目录。只停止 ReportDesk 自己的应用池，勿执行全局 iisreset 或停止 HIS；执行中的查询会中断、内存结果会丢失。
 2. 解压完整兼容包到新目录，不向旧 bin 叠加文件。保留新包的 bin、Global.asax、UI、依赖绑定重定向，以及两个 targetFramework="4.6.2"。
-3. 将旧配置的 ReportDesk.* 现场设置逐项迁入新 Web.config，勿直接用旧 Web.config 覆盖。数据目录、应用池身份及权限保持不变；不复制开发机密码密文。本包允许院内 HTTP，`MaintenanceAddresses` 为空时全部功能可用。不要把旧包里的 `AllowIntranetHttp=false` 再拷回去，否则仍会被拒绝。
+3. 将旧配置的 ReportDesk.* 现场设置逐项迁入新 Web.config，勿直接用旧 Web.config 覆盖。数据目录、应用池身份保持不变；保留新项 `ReportDesk.ReportsDirectory=C:\LIB`，备份 LIB 并检查读写权限；不复制开发机密码密文。本包允许院内 HTTP，`MaintenanceAddresses` 为空时全部功能可用。不要把旧包里的 `AllowIntranetHttp=false` 再拷回去，否则仍会被拒绝。
 4. IIS 应用池仍为 x64、CLR v4.0、Integrated，启用 ASP.NET 4.x。当前现场池名为 `ReportWeb`：只停止该池，将本站物理路径切到新目录并启动该池，不升级系统 Framework，不执行全局 iisreset。
 5. 用 `http://172.18.20.65:8083/` 打开后应能使用查询和维护。在批准后验证 Oracle 查询/取消/导出。框架兼容不代表真实业务验收。
 6. 出错时只停止 `ReportWeb` 池，切回备份的 **net462** 网站目录与 Web.config 并启动该池。不要用旧 net48 包回退。程序回退不撤销 XML 编辑或同步，必要时单独恢复数据备份；不回滚 HIS 数据库。

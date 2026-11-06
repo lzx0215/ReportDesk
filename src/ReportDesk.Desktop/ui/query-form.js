@@ -43,7 +43,7 @@ window.QueryState = {
     const parts = source ? ['数据源：' + source.name] : [];
     for (const p of session.details.parameters) {
       const state = session.parameterValues.get(p.name);
-      if (p.implicitValue || !state || state.value === null || state.value === '' || (Array.isArray(state.value) && !state.value.length)) continue;
+      if ((p.implicitValue && !p.contextDepartment) || !state || state.value === null || state.value === '' || (Array.isArray(state.value) && !state.value.length)) continue;
       let value = p.multiple ? state.selections.map(c => c.label || c.value).join('、') : p.kind === 'CheckBoxType' ? (state.value === 'True' ? '是' : '否') : state.text;
       if (p.kind === 'DateTimeType') value = state.value.replace('T', ' ').replaceAll('-', '/');
       parts.push(p.label + '：' + value);
@@ -110,7 +110,24 @@ window.QueryConditionsView = class QueryConditionsView {
 
   sync(name) {
     const field = this.fields.get(name);
-    this.session.parameterValues.set(name, window.QueryState.capture(field.input, field.definition));
+    const next = window.QueryState.capture(field.input, field.definition);
+    const previous = this.session.parameterValues.get(name);
+    this.session.parameterValues.set(name, next);
+    if (JSON.stringify(previous) !== JSON.stringify(next)) {
+      const changed = new Set([name.toLowerCase()]);
+      let added;
+      do {
+        added = false;
+        for (const [dependentName, dependent] of this.fields) {
+          if (changed.has(dependentName.toLowerCase()) || !(dependent.definition.lookupDependencies || []).some(n => changed.has(n.toLowerCase()))) continue;
+          const fresh = this.createControl(dependent.definition), input = dependent.input;
+          if (input.tagName === 'SELECT') { const index = fresh.selectedIndex; input.replaceChildren(...fresh.options); input.selectedIndex = index; }
+          else { input.value = fresh.value; if (dependent.definition.multiple) input.dataset.selections = '[]'; }
+          input.title = ''; this.session.parameterValues.set(dependentName, window.QueryState.capture(input, dependent.definition));
+          changed.add(dependentName.toLowerCase()); added = true;
+        }
+      } while (added);
+    }
     this.onChange();
   }
 
@@ -119,7 +136,7 @@ window.QueryConditionsView = class QueryConditionsView {
     field.className = 'query-field';
     const label = document.createElement('label');
     label.className = 'query-field-label';
-    const text = definition.label + (definition.implicitValue ? '（已确认编码）' : '');
+    const text = definition.label + (definition.implicitValue && !definition.contextDepartment ? '（已确认编码）' : '');
     if (control.type === 'checkbox') {
       field.classList.add('query-check');
       const caption = document.createElement('span'); caption.textContent = text;

@@ -35,7 +35,7 @@ try {
         Copy-Item -LiteralPath (Join-Path 'src\ReportDesk.Desktop\ui' $name) -Destination $ui.FullName
     }
     Get-ChildItem -LiteralPath 'src\ReportDesk.Web\UI' -File | Copy-Item -Destination $ui.FullName
-    Copy-Item -LiteralPath 'docs\Web-QuickStart.md','docs\Verification-Web-20260918.md','docs\Verification-Web-IntranetHttp-20260918.md' -Destination $destination
+    Copy-Item -LiteralPath 'docs\Web-QuickStart.md','docs\Verification-Web-20260918.md','docs\Verification-Web-IntranetHttp-20260918.md','docs\Verification-Web-LibSync-20260918.md','docs\Verification-Web-LibStartup-20260920.md','docs\Verification-Web-SearchInput-20260920.md','docs\Verification-Web-DepartmentContext-20260920.md','docs\Web-Local-His-Directory.md','docs\Verification-Web-LocalDirectory-20261106.md' -Destination $destination
     if ($TargetFramework -eq 'net462') {
         Copy-Item -LiteralPath 'docs\Web-net462-Compatibility.md' -Destination $destination
     }

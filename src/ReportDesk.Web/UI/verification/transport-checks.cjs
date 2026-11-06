@@ -26,6 +26,14 @@ function harness(handler, options = {}) {
   return { api: window.reportDesk, requests, events, context, downloads };
 }
 async function run() {
+  const localEmpty = harness(() => assert.fail('local mode must not reach server catalog'), { route: '/admin', admin: true });
+  localEmpty.context.window.reportDeskLocal = { active: true, attached: false, state: { staging: false }, indexReports: [], guard() {} };
+  assert.equal((await localEmpty.api.call('list')).ok, true);
+  assert.equal((await localEmpty.api.call('view')).ok, false);
+  assert.equal(localEmpty.requests.length, 1, 'unattached local mode cannot fall back to server operations');
+  const catalog = harness(item => { assert.equal(item.method, 'GET'); assert.equal(item.parsed, undefined); return { version: 'v2' }; }, { prefix: '/desk/' });
+  assert.equal((await catalog.api.catalogStatus()).version, 'v2');
+  assert.equal(catalog.requests.at(-1).url, 'http://localhost/desk/api/catalog-status');
   const sync = harness(() => ({ ok: true, data: { title: 'report', textParameterNames: ['科室'], text: 'PRIVATE_SQL' } }));
   assert.equal((await sync.api.ready).idleMinutes, 23);
   const def = await sync.api.call('definition'); assert.equal(def.ok, true); assert.equal(def.data.text, undefined);
@@ -36,6 +44,7 @@ async function run() {
   assert.equal(sync.requests[1].redirect, 'error');
   assert.equal((await sync.api.call('settings')).ok, false);
   assert.equal((await sync.api.call('sqlEditorOpen')).ok, false);
+  assert.equal((await sync.api.call('exportSql', { reportId: 'r' })).ok, false);
   assert.equal((await sync.api.call('unknown')).ok, false);
   assert.equal(sync.requests.length, 2);
   const adminOnPublic = harness(() => ({ ok: true, data: {} }), { admin: true });
@@ -144,6 +153,15 @@ async function run() {
   assert.equal((await download.api.call('export')).ok, true); assert.deepEqual(download.downloads, ['http://localhost/api/downloads/d1']);
   const external = harness(() => ({ ok: true, data: { downloadUrl: 'https://example.invalid/result' } }));
   assert.equal((await external.api.call('export')).ok, false); assert.equal(external.downloads.length, 0);
+  const sqlExport = harness(() => ({ ok: true, data: { downloadUrl: '/desk/api/downloads/sql' } }), { admin: true, route: '/desk/admin/', prefix: '/desk/' });
+  assert.equal((await sqlExport.api.call('exportSql', { reportId: 'r' })).ok, true);
+  assert.equal(sqlExport.requests.at(-1).url, 'http://localhost/desk/api/admin/exportSql');
+  assert.deepEqual(sqlExport.requests.at(-1).parsed.args, { reportId: 'r' });
+  assert.deepEqual(sqlExport.downloads, ['http://localhost/desk/api/downloads/sql']);
+  const sqlMissing = harness(() => ({ ok: true, data: null }), { admin: true });
+  assert.match((await sqlMissing.api.call('exportSql', { reportId: '' })).message, /缺少下载地址/);
+  const sqlExternal = harness(() => ({ ok: true, data: { downloadUrl: 'https://example.invalid/sql' } }), { admin: true });
+  assert.equal((await sqlExternal.api.call('exportSql', { reportId: '' })).ok, false); assert.equal(sqlExternal.downloads.length, 0);
   const prefix = harness(() => ({ ok: true, data: [] }), { prefix: '/desk/' });
   await prefix.api.call('list'); assert.equal(prefix.requests.at(-1).url, 'http://localhost/desk/api/list');
   assert.notEqual(prefix.requests.at(-1).parsed.tabId, sync.requests[1].parsed.tabId);

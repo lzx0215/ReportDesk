@@ -8,13 +8,20 @@ namespace ReportDesk.Core;
 // These are option queries only. The report SQL and its department restrictions stay intact.
 public static class ParameterOptions
 {
+    // Only the known implicit HIS department context gets this picker; never invent operator/role identities.
+    public static bool IsCurrentDepartment(ParameterDefinition p) => p.Implicit &&
+        p.Name.Equals("CurrentDeptID", StringComparison.OrdinalIgnoreCase) && p.LookupSql.Length == 0 && p.LookupSourceName.Length == 0;
+
     public static bool IsDictionary(ParameterDefinition p) =>
+        IsCurrentDepartment(p) ||
         p.OptionSource == "Dictionary" && !string.IsNullOrWhiteSpace(p.Dictionary) ||
         p.OptionSource == "DepartmentType" && new[] { "ALL", "C", "I", "F", "L", "PI", "T", "O", "D", "P", "N", "OP", "U", "WZ", "UC", "UL" }.Contains(p.Dictionary) ||
         p.OptionSource == "EmployeeType" && new[] { "ALL", "O", "D", "N", "F", "P", "T", "C" }.Contains(p.Dictionary);
 
     public static string LookupSql(ParameterDefinition p)
     {
+        if (IsCurrentDepartment(p))
+            return "select DEPARTMENT_ID, DEPARTMENT_NAME from COM_BD_DEPARTMENT where VALID_FLAG = '1' order by DEPARTMENT_NAME, DEPARTMENT_ID";
         if (!IsDictionary(p)) return p.LookupSql;
         if (p.OptionSource == "Dictionary")
             // QueryConst calls QueryList(type), which does NOT add VALID_FLAG.

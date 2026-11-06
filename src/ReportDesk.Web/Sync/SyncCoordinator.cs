@@ -69,8 +69,12 @@ namespace ReportDesk.Web.Sync
             {
                 if (state.Files.Any(f => Equal(f.Path, path))) continue;
                 cancellation.ThrowIfCancellationRequested();
-                var bytes = File.ReadAllBytes(work.Resolve(path)); policy.ValidateFile(path, bytes);
-                state.Files.Add(new SyncedFile { Path = path, Hash = ReportWorkDirectory.Hash(bytes) });
+                // A baseline records existing bytes for conflict detection; it does not approve a download.
+                // Legacy HIS layouts can contain invalid XML characters even when their query is importable.
+                // Keep those files unchanged and validate incoming batches in Prepare before any write.
+                var hash = ReportWorkDirectory.HashFile(work.Resolve(path));
+                if (hash.Length == 0) throw new SyncSafetyException("BaselineFileMissing");
+                state.Files.Add(new SyncedFile { Path = path, Hash = hash });
             }
             XmlDisk.Save(StatePath, state);
         }

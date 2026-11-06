@@ -29,4 +29,6 @@ Checks cover:
 
 The fixture is an offline archive source carrying real report byte copies, not a simulated Oracle result set. Test metadata/unsafe envelope fixtures exercise file safety only. Test copies and recovery evidence are left under a unique `ReportDeskSyncChecks-*` temp directory whose path is printed; no broad cleanup is run.
 
+2026-10-08 save/recovery regression: the pre-fix implementation returned `RecoveryRequired` when `SqlXmlEditor.Save` failed against an unchanged read-only real-LIB copy. The fixed implementation passes **24 groups** on both net48 and net462 (0 warnings/errors). New coverage includes an actual NTFS access-denied replacement (temporary file/parent DACLs restored in `finally`), read-only originals, pre-mutation process exit, mixed changed/unchanged batches, corrupted backups despite unchanged targets, and changed-file recovery failures retaining their journals and redacted diagnostics. Source LIB hashes remain unchanged; Oracle and IIS remain NOT RUN. Logs are isolated under each run's temp evidence directory.
+
 Main-agent integration, APIs, startup order, limits and the unresolved full-history BLOB polling cost are documented in `src/ReportDesk.Web/Sync/INTEGRATION.md`.

@@ -116,13 +116,21 @@ async function select(id, source = 0, editConditions = false) {
   const definition = await call('definition', { reportId: id });
   currentReportSession = window.QueryState.create(detail, api.isWeb ? '' : definition.text, api.isWeb ? definition.textParameterNames : undefined);
   queryFields.mount(currentReportSession); renderQuerySummary(); setConditionsOpen(editConditions, false);
-  renderList(); progress('当前报表尚未查询。');
+  renderList(); renderResult(); progress('当前报表尚未查询。');
 }
 async function refreshList(chooseFirst = false) { reports = await call('list');  renderList(); if (chooseFirst || !filteredReports().some(r => r.id === selected)) await select(filteredReports()[0]?.id ?? null); }
 async function filterReports() { renderList(); if (!filteredReports().some(r => r.id === selected)) await select(filteredReports()[0]?.id ?? null); }
 for (const b of document.querySelectorAll('[data-mode]')) b.onclick = () => task('正在切换列表…', async () => { mode = b.dataset.mode; await filterReports(); });
 for (const [id,m] of [['#all','all']]) $(id).onclick = () => task('正在切换列表…', async () => { mode = m; await filterReports(); });
-let searchTimer; $('#report-search').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => task('正在搜索报表…', filterReports), 250); };
+let searchTimer, searchComposing = false;
+function scheduleReportSearch() {
+  clearTimeout(searchTimer);
+  // Filtering is local presentation: never disable the focused input, select a report, or clear results.
+  searchTimer = setTimeout(() => { if (!dead) renderList(); }, 250);
+}
+$('#report-search').addEventListener('compositionstart', () => { searchComposing = true; clearTimeout(searchTimer); });
+$('#report-search').addEventListener('compositionend', () => { searchComposing = false; scheduleReportSearch(); });
+$('#report-search').oninput = event => { if (!searchComposing && !event.isComposing) scheduleReportSearch(); };
 $('#source').onchange = () => task('正在切换数据源…', () => select(selected, Number($('#source').value), true));
 function values() { return currentReportSession ? window.QueryState.values(currentReportSession) : {}; }
 function buildQueryPayload() { return window.QueryState.payload(currentReportSession); }
@@ -164,9 +172,27 @@ function executeQuery() {
   });
 }
 $('#query').onclick = $('#conditions-query').onclick = executeQuery;
+function renderHeaderPreview() {
+  const preview = currentReportSession && detail?.headerPreview;
+  if (!preview) return false;
+  const columns = preview.columns || [], table = element('table', undefined, 'header-preview');
+  table.append(element('caption', preview.title || detail.name));
+  if (columns.length) {
+    const group = element('colgroup'), head = element('tr');
+    for (const column of columns) {
+      const col = element('col'); col.style.width = column.width + 'px'; group.append(col);
+      const th = element('th', column.label); th.scope = 'col'; head.append(th);
+    }
+    table.style.minWidth = columns.reduce((sum, column) => sum + column.width, 0) + 'px';
+    const thead = element('thead'); thead.append(head); table.append(group, thead, element('tbody'));
+  }
+  $('#table-wrap').append(table);
+  if (preview.message) $('#table-wrap').append(element('p', preview.message, 'header-preview-notice'));
+  return true;
+}
 function renderResult() {
   $('#table-wrap').replaceChildren(); $('#range').textContent = ''; $('#result-count').textContent = page ? '查询结果 · ' + page.count + ' 行' : '查询结果';
-  if (!page) { const empty = element('div', undefined, 'empty'); empty.append(icon('empty'), element('p', '尚未查询。可先设置「修改条件」，再点击「开始查询」。')); $('#table-wrap').append(empty); return; }
+  if (!page) { const preview = renderHeaderPreview(); const empty = element('div', undefined, preview ? 'empty header-preview-empty' : 'empty'); empty.append(icon('empty'), element('p', '尚未查询。可先设置「修改条件」，再点击「开始查询」。')); $('#table-wrap').append(empty); return; }
   const table = element('table'); const thead = element('thead'); const head = element('tr'); const selection = element('th'); const all = element('input'); all.type = 'checkbox'; all.setAttribute('aria-label','选择当前段全部行'); all.onchange = () => { selectedRows = new Set(all.checked ? page.rows.map((_,i) => i) : []); renderResult(); ready(); }; selection.append(all); head.append(selection);
   page.columns.forEach((column, index) => { const th = element('th'); if (!['String','DateTime'].includes(column.type)) th.className = 'numeric'; th.setAttribute('aria-sort', sortColumn === index ? descending ? 'descending' : 'ascending' : 'none'); const b = element('button', column.name); b.append(icon(sortColumn === index ? descending ? 'down' : 'up' : 'sort')); b.onclick = () => task('正在排序已加载结果…', async () => { descending = sortColumn === index ? !descending : false; sortColumn = index; await view(); }); th.append(b); head.append(th); });
   thead.append(head); table.append(thead); const body = element('tbody');
@@ -219,7 +245,12 @@ $('#tns-reload').onclick = () => task('正在刷新网络服务…', () => alias
 $('#tns-discover').onclick = () => task('正在查找 TNS 来源…', async () => { const paths = await call('discoverTns'); paths.forEach(addTns); if (!$('#conn-tns').value && paths.length===1) { $('#conn-tns').value=paths[0]; await aliases(paths[0]); } $('#test-status').textContent = paths.length ? `找到 ${paths.length} 个来源，请核对当前选择。` : '未找到来源，请浏览文件。'; });
 $('#test-connection').onclick = () => task('正在测试连接…', async () => { $('#test-status').textContent = '正在测试连接，等待网络返回…'; try { const r = await call('testConnection', connectionArgs()); settings = r.settings; $('#conn-password').value = ''; $('#conn-keep').checked = settings.hasPassword; $('#conn-remember').checked = settings.remember; connectionMode(); clearResult(); $('#connection-state').textContent = '连接已验证'; $('#test-status').textContent = '连接成功 · Oracle ' + r.version + (settings.remember ? '。配置已保存，密码已加密保存，下次无需重新输入。' : '。配置已保存，密码仅在本次打开期间使用。') + '未验证报表权限。'; } catch(e) { $('#test-status').textContent = e.message; throw e; } });
 $('#connection-form').onsubmit = e => { e.preventDefault(); task('正在保存连接设置…', async () => { settings=await call('saveSettings',connectionArgs()); $('#conn-password').value=''; $('#connection').close(); clearResult(); progress('连接设置已保存，未自动连接。'); }); };
-async function loadLookup(p) { lookupTarget=p.name; lookupPage=await call('lookup',{reportId:selected,source:currentReportSession.source,parameter:p.name,values:values()}); $('#lookup-title').textContent=p.label+' · 选择编码'; $('#lookup-filter').value=''; $('#lookup-all').hidden=!p.multiple || !p.hasAll; $('#lookup-clear').hidden=!p.multiple; renderLookup(); $('#lookup').showModal(); }
+async function loadLookup(p) {
+  const missing = (p.lookupDependencies || []).map(name => currentReportSession.details.parameters.find(d => d.name.toLowerCase() === name.toLowerCase()))
+    .filter(d => { if (!d) return false; const value = currentReportSession.parameterValues.get(d.name)?.value; return value == null || (Array.isArray(value) && !value.length) || (d.implicitValue && !String(value).trim()); });
+  if (missing.length) throw new Error('请先选择或填写：' + missing.map(d => d.label).join('、') + '。\n再加载“' + p.label + '”的选项。');
+  lookupTarget=p.name; lookupPage=await call('lookup',{reportId:selected,source:currentReportSession.source,parameter:p.name,values:values()}); $('#lookup-title').textContent=p.label+' · 选择编码'; $('#lookup-filter').value=''; $('#lookup-all').hidden=!p.multiple || !p.hasAll; $('#lookup-clear').hidden=!p.multiple; renderLookup(); $('#lookup').showModal();
+}
 function setChoices(choices) { const input=fields.get(lookupTarget).input; input.dataset.selections=JSON.stringify(choices); input.value=choices.length ? `已选择 ${choices.length} 项` : ''; queryFields.sync(lookupTarget); }
 function renderLookup() { $('#lookup-list').replaceChildren(); const field=fields.get(lookupTarget); const choices=field.definition.multiple?JSON.parse(field.input.dataset.selections||'[]'):[];
   for (const row of lookupPage.rows) { const value=row[0]??'',label=row[1]??''; const b=element('button',label+'  ['+value+']');

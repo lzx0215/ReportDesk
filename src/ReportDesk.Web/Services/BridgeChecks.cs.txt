@@ -48,6 +48,25 @@ internal static class BridgeChecks
         File.WriteAllText(Path.Combine(config, "report-visibility.xml"), "<not-a-desktop-visibility-file />");
         try
         {
+            Check("configured root overrides narrow and former remembered sources without rewriting them", () => {
+                string migrationData = Path.Combine(root, "migration"), migrationConfig = Path.Combine(migrationData, "config"), migrationReports = Path.Combine(root, "migration-lib");
+                Directory.CreateDirectory(migrationConfig); Directory.CreateDirectory(migrationReports);
+                string first = Path.Combine(migrationReports, input[0]), second = Path.Combine(migrationReports, input[1]);
+                File.Copy(paths[0], first);
+                var remembered = new ImportSourcesStore(migrationConfig); remembered.Remember(first, false); remembered.Remember(reports, true);
+                string sourceFile = Path.Combine(migrationConfig, "import-sources.json"), before = File.ReadAllText(sourceFile);
+                using var migrated = new WebBackend(migrationData, migrationReports);
+                using var tab = migrated.CreateSession();
+                Assert(((System.Collections.IEnumerable)Call(migrated, tab, "list")).Cast<object>().Count() == 1);
+                string oldVersion = migrated.CatalogVersion;
+                File.Copy(paths[1], second);
+                var discovered = D(Call(migrated, tab, "checkNewReports", admin: true));
+                Assert(Convert.ToInt32(discovered["addedCount"]) == 1 && migrated.CatalogVersion != oldVersion);
+                Assert(File.ReadAllText(sourceFile) == before);
+                using var restarted = new WebBackend(migrationData, migrationReports);
+                using var restartedTab = restarted.CreateSession();
+                Assert(((System.Collections.IEnumerable)Call(restarted, restartedTab, "list")).Cast<object>().Count() == 2);
+            });
             using var backend = new WebBackend(data, reports);
             using var one = backend.CreateSession(); using var two = backend.CreateSession();
             var reportsDto = ((System.Collections.IEnumerable)Call(backend, one, "list")).Cast<object>().Select(D).ToArray();
@@ -142,12 +161,13 @@ internal static class BridgeChecks
                 using var cts = new CancellationTokenSource(); cts.Cancel();
                 Throws<OperationCanceledException>(() => backend.ReloadChangedReportsStrict(paths, cts.Token));
             });
-            Check("path boundary rejects sibling traversal and outside remembered sources", () => {
+            Check("path boundary ignores outside sources while loading the configured root", () => {
                 Throws<InvalidOperationException>(() => WebBackend.ValidatePath(Path.Combine(root, "outside.xml"), reports));
                 var otherData = Path.Combine(root, "other-data"); Directory.CreateDirectory(Path.Combine(otherData, "config"));
                 File.WriteAllText(Path.Combine(otherData, "config", "import-sources.json"), Json.Serialize(new[] { new { Path = lib, Folder = true } }));
                 using var guarded = new WebBackend(otherData, reports); using var session = guarded.CreateSession();
-                Assert(!((System.Collections.IEnumerable)Call(guarded, session, "list")).Cast<object>().Any());
+                var allowed = ((System.Collections.IEnumerable)Call(guarded, session, "list")).Cast<object>().Select(D).ToArray();
+                Assert(allowed.Length == 2 && allowed.All(r => reportsDto.Any(original => (string)original["id"] == (string)r["id"])));
                 Assert(!File.Exists(Path.Combine(otherData, "config", "connection.json")));
             });
             Check("session construction and disposal never scan/write source directories", () => {

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><Nullable>disable</Nullable></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/ReportDesk.Core/ReportDesk.Core.csproj" />
+    <Compile Include="../../src/ReportDesk.Web/Sync/ReportFileTransaction.cs" Link="ReportFileTransaction.cs" />
+    <Compile Include="../../src/ReportDesk.Web/Sync/ReportWorkDirectory.cs" Link="ReportWorkDirectory.cs" />
+    <Compile Include="../../src/ReportDesk.Web/Sync/SyncContracts.cs" Link="SyncContracts.cs" />
+  </ItemGroup>
+</Project>

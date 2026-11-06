@@ -13,7 +13,7 @@ Copy these files to the published `UI/` directory and expose only these assets:
 
 | Source | Destination / asset name |
 | --- | --- |
-| This directory | `index.html`, `transport.js`, `web.js`, `web.css` |
+| This directory | `index.html`, `transport.js`, `web.js`, `web.css`, `xml-editor.js`, `local-directory.js` |
 | `src/ReportDesk.Desktop/ui/` | `styles.css`, `execution.css`, `sql-editor.css`, `query-form.js`, `renderer.js`, `sql-editor.js`, `close-emblem.svg` |
 
 Serve scripts/styles/images at `{BasePath}assets/{name}`. Transport derives the
@@ -22,9 +22,15 @@ scripts. The desktop `index.html`, preload and editor files are unchanged.
 
 ## Transport contract
 
-- `GET api/session` returns `{csrf,admin,offline,idleMinutes}` directly. A missing
-  idleMinutes uses 60 in the UI. All responses must use `Cache-Control: no-store`.
-- Every POST is `{args,tabId}`, with the session cookie and `X-ReportDesk-CSRF`.
+- `GET api/session` returns `{csrf,admin,offline,idleMinutes,serverReportsEnabled,
+  reportsDirectory,syncReady,syncSeconds}` directly. Missing idleMinutes uses 60;
+  only strict `serverReportsEnabled === true` enables server-report UI. The
+  reportsDirectory is null unless the caller is admin and server mode is enabled.
+  All responses must use `Cache-Control: no-store`.
+- Operation POSTs are `{args,tabId,localExpected}`, with the session cookie and
+  `X-ReportDesk-CSRF`. `localExpected` is true while local mode/staging is attached,
+  except for explicit `localBegin`. If that context has expired, HTTP 410 rejects
+  the call instead of creating a server context or running against another source.
   tabId is a fresh cryptographic ID per document; no passwords, drafts, results,
   parameter values or tokens are written to localStorage/sessionStorage.
 - Every whitelisted POST can return `{ok:true,data}` or `{ok:true,jobId}`.
@@ -37,8 +43,11 @@ scripts. The desktop `index.html`, preload and editor files are unchanged.
   a terminal state; deleting a task is not interpreted as immediate completion.
 - The adapter returns the preload-compatible `{ok,data,message,cancelled}` and
   exposes `onProgress/onFatal`. It never retries POSTs. Network uncertainty is
-  displayed, not reported as successful or cancelled. HTTP 401/403 closes UI
-  operations; a task 404 explicitly asks for a fresh query.
+  displayed, not reported as successful or cancelled. HTTP 403 is fatal. HTTP 410,
+  or HTTP 401 while local mode/recovery is attached or handling tab-lifecycle,
+  marks the workspace lost and preserves drafts and local recovery records.
+  Other HTTP 401 is fatal; a task 404 explicitly asks for a fresh query. Only an
+  explicit `localBegin` reinitializes the session; it never replays a failed call.
 - Export returns `{downloadUrl,count?}`. The URL must be same-origin under the
   application's `api/` path; the browser downloads using GET and its cookie.
   The Web success message confirms a download request for the complete filtered
@@ -47,7 +56,7 @@ scripts. The desktop `index.html`, preload and editor files are unchanged.
 Public methods: bootstrap, list, select, definition, relatedFiles, query, view,
 page, lookup, lookupPage, lookupAll, clear, export.
 
-Admin methods: settings, saveSettings, testConnection, import, checkNewReports,
+Admin methods: settings, saveSettings, testConnection, activateConnection, import, checkNewReports,
 recheck, reloadReport, sqlEditorOpen, sqlEditorCheck, sqlEditorSave,
 sqlEditorReveal, layoutPreview, layoutSave, discoverTns, tnsAliases, syncStatus,
 syncNow, resolveSyncConflict, openLogs.
@@ -76,9 +85,32 @@ and retains full diagnostics; otherwise it routes to `api/relatedFiles` and
 receives summaryOnly.
 The Web favicon reuses `/assets/close-emblem.svg`, including the BasePath rewrite.
 
-Import uses `{folder:boolean,path:string}` where path is relative to the approved
-server root; empty folder path means the whole root. No browser file picker is
-used. Server validation must independently reject traversal and links.
+The rail's single report-source entry opens the local-directory dialog. Default
+`ServerReportsEnabled=false` does not scan or depend on a server LIB; closing the
+local directory returns to an empty list. Explicit server mode adds the
+server-import tab. Local SQL/XML writes return to the client directory with the
+existing backup/recovery flow; server import uploads a copy and later edits stay
+on the server. Tab selection does not switch the active source. The entry remains
+available during local mode/staging; server import requires explicitly switching
+back to server mode and preserves the existing draft/recovery guards.
+Server XML/file-folder choices both use native
+browser pickers, upload through `uploadImport`, then call `import` with
+`{folder:boolean,path:string}` returned by the upload. The existing relative-path
+API remains supported; server validation independently rejects traversal and links.
+
+Settings shows database connections by default; only explicit server mode adds
+the HIS sync tab and shortcut. The sync shortcut opens its tab, while editor
+recovery opens the source dialog's local tab; neither fetches
+database settings nor discovers TNS. Tabs preserve the database draft; profile changes
+and close prompt before discarding unsaved connection input. No draft is persisted.
+`settings {profileId?}` reads a profile without activating it. Settings DTOs keep
+legacy fields and add `profileId`, `activeProfileId`, and `profiles` containing
+`{id,name,isActive,hasPassword}`. `saveSettings`/`testConnection` accept `profileId`
+or `newProfile:true`; new/nonactive profiles do not change the global connection.
+`activateConnection {profileId}` explicitly activates a saved profile after UI
+confirmation; it does not test the connection. Existing no-ID callers keep the
+current-connection behavior. Secrets are never returned or stored in the browser.
+See `docs/Web-QuickStart.md` for global scope, DPAPI behavior, and rollback backup.
 `discoverTns` must return only registered server files; `tnsAliases` receives
 `{path}` from that list. The file picker is hidden and the method is denied.
 
@@ -106,13 +138,23 @@ Unresolvable or incomplete entries only show an explanation. String-only conflic
 or a conflict count can be displayed but cannot be resolved. A rejected stale
 fingerprint is shown as a failure, without automatic resubmission.
 
-Footer/help state: results remain in server memory, configurable idle release
-(default 60 minutes), no cleanup during execution, and re-query after IIS recycle
-or session loss. No automatic polling runs while idle just to keep a session
-alive. Each page has a separate tabId; refreshing creates a new context and does
-not automatically restore or rerun a previous query. This is a known limitation
-relative to the plan's best-effort refresh recovery. Existing server contexts are
-released by the backend's idle policy; the UI does not implement server cleanup.
+Footer/help state: results remain in server memory. Each page expires independently
+after `IdleMinutes` (default 60); activity in another tab does not renew it. Running
+server operations retain their contexts. Refresh creates a new tabId and does not
+automatically restore or rerun a previous query. IIS recycle loses memory results.
+
+`POST api/tab-lifecycle` uses `{tabId,args:{action:"touch"|"release"}}`, CSRF and
+the session cookie. It returns `{ok:true,data:{alive,local,busy,released}}`; an
+unknown tab is not created. Visible pointer/keyboard activity sends throttled
+touches for attached local workspaces, and physical browser writes touch every
+30 seconds. Ordinary idle pages have no keepalive polling. A definite expiry
+dispatches `reportdesk-workspace-lost`; drafts and IndexedDB recovery survive.
+`pagehide` sends a best-effort keepalive release unless in BFCache, a task/write is
+active, or a save is pending. The server refuses immediate release during a task
+or pending local save; independent idle cleanup still applies once no task runs.
+Release delivery is not guaranteed. Server sweeps retry marked abandoned-worker
+and retired workspace cleanup; active workers, unknown directories and links are
+excluded. Client XML, backups and browser recovery records are not swept.
 
 ## Offline verification
 

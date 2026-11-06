@@ -40,22 +40,31 @@ internal sealed class WebContext : IDisposable
 
 internal sealed class WebBackend : IDisposable
 {
+    internal const string ServerReportsDisabledMessage = "服务器报表目录已停用，请在“报表来源”中选择本机 XML 目录。";
     private readonly Service shared;
     private readonly string dataDirectory, reportRoot;
+    private readonly bool reportsEnabled;
     private long version;
+    private readonly string instance = Guid.NewGuid().ToString("N");
+    public string CatalogVersion => instance + ":" + Interlocked.Read(ref version).ToString(System.Globalization.CultureInfo.InvariantCulture);
     private bool disposed;
     public object FileGate { get; } = new();
+    internal Action<string>? ValidateApprovedTns { get; set; }
 
     public WebBackend(string dataDirectory, string reportRoot, bool offline = true)
+        : this(dataDirectory, reportRoot, offline, true) { }
+
+    public WebBackend(string dataDirectory, string reportRoot, bool offline, bool serverReportsEnabled)
     {
+        reportsEnabled = serverReportsEnabled;
         this.dataDirectory = Path.GetFullPath(Path.Combine(dataDirectory, "config"));
-        this.reportRoot = Path.GetFullPath(reportRoot);
+        this.reportRoot = reportsEnabled ? Path.GetFullPath(reportRoot) : "";
         if (!Directory.Exists(this.dataDirectory)) throw new InvalidOperationException("服务端配置目录不存在。");
-        ValidatePath(this.reportRoot, this.reportRoot);
+        if (reportsEnabled) ValidatePath(this.reportRoot, this.reportRoot);
         ValidatePath(this.dataDirectory, this.dataDirectory);
         ValidateConfigFiles();
         shared = new Service(this.dataDirectory, this.dataDirectory, offline, allReports: true);
-        shared.WebInitialize(this.reportRoot, ReportPath);
+        if (reportsEnabled) shared.WebInitialize(this.reportRoot, ReportPath);
     }
 
     public WebContext CreateSession()
@@ -64,6 +73,46 @@ internal sealed class WebBackend : IDisposable
         {
             ThrowIfDisposed();
             return new WebContext(this, shared.WebCreateContext(), version);
+        }
+    }
+
+    private WebBackend(Service connectionSnapshot, string configDirectory, string reportRoot, CancellationToken token)
+    {
+        reportsEnabled = true;
+        dataDirectory = configDirectory;
+        this.reportRoot = Path.GetFullPath(reportRoot);
+        ValidatePath(this.reportRoot, this.reportRoot);
+        shared = connectionSnapshot.WebCreateLocal(this.reportRoot, ReportPath, token);
+    }
+
+    // Internal creation only: the HTTP client cannot choose a server directory.
+    internal WebBackend CreateLocal(string root, CancellationToken token)
+    {
+        Service snapshot;
+        lock (FileGate) { ThrowIfDisposed(); snapshot = shared.WebCreateContext(); }
+        // A large local scan must not hold the public catalog/connection gate.
+        using (snapshot) return new WebBackend(snapshot, dataDirectory, root, token);
+    }
+
+    internal IReadOnlyList<string> GetReportFiles(WebContext context, Dictionary<string, object> args)
+    {
+        if (context == null || context.Owner != this) throw new InvalidOperationException("查询上下文无效。");
+        lock (context.Gate) lock (FileGate)
+        {
+            CheckContext(context); Refresh(context);
+            var paths = context.Service.WebReportFiles(args);
+            foreach (var path in paths) ReportPath(path);
+            return paths;
+        }
+    }
+
+    internal object LocalLocations(WebContext context, IReadOnlyList<Tuple<string, string>> items)
+    {
+        if (context == null || context.Owner != this) throw new InvalidOperationException("查询上下文无效。");
+        lock (context.Gate) lock (FileGate)
+        {
+            CheckContext(context); Refresh(context);
+            return context.Service.WebLocalLocations(items);
         }
     }
 
@@ -76,6 +125,8 @@ internal sealed class WebBackend : IDisposable
         {
             CheckContext(context);
             token.ThrowIfCancellationRequested();
+            if (!reportsEnabled && method != "bootstrap" && method != "list" && method != "clear" && !IsConnectionOperation(method))
+                throw new InvalidOperationException(ServerReportsDisabledMessage);
             // Query/lookup execution happens AFTER releasing FileGate.
             if (IsOrdinary(method) && !(admin && method == "relatedFiles"))
             {
@@ -101,7 +152,7 @@ internal sealed class WebBackend : IDisposable
                     // Publish failure blockers too: a file saved but not reloaded
                     // must not allow another tab to execute its former definition.
                     // File edits publish only from the transaction reload callback.
-                    if (method != "sqlEditorSave" && method != "layoutSave")
+                    if (method != "sqlEditorSave" && method != "layoutSave" && method != "xmlEditorSave")
                     {
                         if (!global) shared.WebPublishDefinitions(service);
                         version++;
@@ -119,6 +170,22 @@ internal sealed class WebBackend : IDisposable
             CheckContext(context);
             token.ThrowIfCancellationRequested();
             return context.Service.WebExport(args, token);
+        }
+    }
+
+    // Called only through the maintenance-authorized HTTP route. No editor state
+    // or catalog version is changed by exporting saved definitions.
+    public ReportDesk.Web.SqlExportResult ExportSql(WebContext context, Dictionary<string, object> args, CancellationToken token, Action<string> progress)
+    {
+        if (context == null || context.Owner != this) throw new InvalidOperationException("查询上下文无效。");
+        lock (context.Gate)
+        {
+            CheckContext(context);
+            lock (FileGate)
+            {
+                Refresh(context);
+                return context.Service.WebExportSql(args, token, progress);
+            }
         }
     }
 
@@ -153,6 +220,7 @@ internal sealed class WebBackend : IDisposable
 
     public object ReloadChangedReportsStrict(IEnumerable<string> paths, CancellationToken token = default)
     {
+        if (!reportsEnabled) throw new InvalidOperationException(ServerReportsDisabledMessage);
         var changed = paths.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         foreach (var path in changed) ReportPath(path);
         lock (FileGate)
@@ -177,6 +245,36 @@ internal sealed class WebBackend : IDisposable
             {
                 Refresh(context);
                 try { return context.Service.WebEditPaths(args, layout); }
+                catch (InvalidOperationException ex) { throw context.Service.WebSafeAdminError(ex, args); }
+            }
+        }
+    }
+
+    public (string Name, string Path) GetPublishSource(WebContext context, Dictionary<string, object> args)
+    {
+        if (context == null || context.Owner != this) throw new InvalidOperationException("查询上下文无效。");
+        lock (context.Gate)
+        {
+            CheckContext(context);
+            lock (FileGate)
+            {
+                Refresh(context);
+                context.Service.WebValidateReport(args, ReportPath);
+                return context.Service.WebPublishSource(args);
+            }
+        }
+    }
+
+    public (IReadOnlyList<string> Paths, string ExpectedHash) GetXmlEditPlan(WebContext context, Dictionary<string, object> args)
+    {
+        if (context == null || context.Owner != this) throw new InvalidOperationException("查询上下文无效。");
+        lock (context.Gate)
+        {
+            CheckContext(context);
+            lock (FileGate)
+            {
+                Refresh(context);
+                try { return (context.Service.WebXmlEditPaths(args), context.Service.WebXmlEditExpectedHash(args)); }
                 catch (InvalidOperationException ex) { throw context.Service.WebSafeAdminError(ex, args); }
             }
         }
@@ -213,9 +311,10 @@ internal sealed class WebBackend : IDisposable
     {
         switch (method)
         {
-            case "settings": case "saveSettings": case "testConnection": case "discoverTns": case "tnsAliases":
+            case "settings": case "saveSettings": case "testConnection": case "activateConnection": case "discoverTns": case "tnsAliases":
             case "import": case "checkNewReports": case "recheck": case "relatedFiles": case "sqlEditorOpen": case "sqlEditorCheck":
-            case "sqlEditorSave": case "sqlEditorReveal": case "reloadReport": case "layoutPreview": case "layoutSave": return true;
+            case "sqlEditorSave": case "sqlEditorReveal": case "reloadReport": case "layoutPreview": case "layoutSave":
+            case "xmlEditorOpen": case "xmlEditorCheck": case "xmlEditorSave": return true;
             default: return false;
         }
     }
@@ -224,11 +323,14 @@ internal sealed class WebBackend : IDisposable
     {
         switch (method)
         {
-            case "settings": case "saveSettings": case "testConnection": case "discoverTns": case "tnsAliases":
+            case "settings": case "saveSettings": case "testConnection": case "activateConnection": case "discoverTns": case "tnsAliases":
             case "import": case "checkNewReports": case "recheck": return true;
             default: return false;
         }
     }
+
+    internal static bool IsConnectionOperation(string method)
+        => method == "settings" || method == "saveSettings" || method == "testConnection" || method == "activateConnection" || method == "discoverTns" || method == "tnsAliases";
 
     private void ValidateAdminArguments(Service service, string method, Dictionary<string, object> args)
     {
@@ -236,18 +338,33 @@ internal sealed class WebBackend : IDisposable
         switch (method)
         {
             case "import": ReportPath(Service.Text(args, "path")); break;
-            case "checkNewReports": shared.WebValidateRememberedSources(ReportPath); break;
+            case "checkNewReports": ReportPath(reportRoot); break;
             case "recheck": shared.WebValidateAllReports(ReportPath); break;
             case "tnsAliases": ValidatePath(Service.Text(args, "path"), dataDirectory); break;
             case "saveSettings": case "testConnection":
-                if (Service.Number(args, "mode") == (int)ConnectionMode.Tns) ValidatePath(Service.Text(args, "tnsFile"), dataDirectory);
+                if (Service.Number(args, "mode") == (int)ConnectionMode.Tns) ValidateConnectionTns(Service.Text(args, "tnsFile"));
+                break;
+            case "activateConnection":
+                var selected = shared.WebProfileConnection(Service.Text(args, "profileId"));
+                if (selected.Mode == ConnectionMode.Tns) ValidateConnectionTns(selected.TnsFile);
                 break;
             case "relatedFiles": case "sqlEditorOpen": case "sqlEditorCheck": case "sqlEditorSave":
-            case "sqlEditorReveal": case "reloadReport": case "layoutPreview": case "layoutSave": service.WebValidateReport(args, ReportPath); break;
+            case "sqlEditorReveal": case "reloadReport": case "layoutPreview": case "layoutSave":
+            case "xmlEditorOpen": case "xmlEditorCheck": case "xmlEditorSave": service.WebValidateReport(args, ReportPath); break;
         }
     }
 
-    private void ReportPath(string path) => ValidatePath(path, reportRoot);
+    private void ReportPath(string path)
+    {
+        if (!reportsEnabled) throw new InvalidOperationException(ServerReportsDisabledMessage);
+        ValidatePath(path, reportRoot);
+    }
+
+    private void ValidateConnectionTns(string path)
+    {
+        ValidatePath(path, dataDirectory);
+        ValidateApprovedTns?.Invoke(path);
+    }
 
     private void ValidateConfigFiles()
     {

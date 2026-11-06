@@ -3,12 +3,26 @@
     <OutputType>Library</OutputType><PlatformTarget>x64</PlatformTarget>
     <AssemblyName>ReportDesk.Web</AssemblyName>
     <DefineConstants>$(DefineConstants);REPORTDESK_WEB</DefineConstants>
+    <DefineConstants Condition="'$(ReportDeskLegacyCoreDirectory)' != ''">$(DefineConstants);REPORTDESK_LEGACY_CORE</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../ReportDesk.Core/ReportDesk.Core.csproj" />
+    <Compile Remove="obj/**/*.cs;bin/**/*.cs" />
+    <ProjectReference Include="../ReportDesk.Core/ReportDesk.Core.csproj" Condition="'$(ReportDeskLegacyCoreDirectory)' == ''" />
     <Reference Include="System.Web" /><Reference Include="System.Web.Extensions" />
     <Reference Include="System.Configuration" /><Reference Include="System.Data" />
     <Reference Include="System.IO.Compression" /><Reference Include="System.IO.Compression.FileSystem" />
     <Compile Include="../ReportDesk.Host/*.cs" Link="SharedHost/%(Filename)%(Extension)" />
   </ItemGroup>
+  <ItemGroup Condition="'$(ReportDeskLegacyCoreDirectory)' != ''">
+    <Compile Include="../ReportDesk.Core/FullXmlEditor.cs" Link="Legacy/FullXmlEditor.cs" />
+    <LegacyDependency Include="$(ReportDeskLegacyCoreDirectory)/*.dll" Exclude="$(ReportDeskLegacyCoreDirectory)/ReportDesk.Web.dll" />
+    <Reference Include="@(LegacyDependency)"><HintPath>%(Identity)</HintPath><Private>true</Private></Reference>
+  </ItemGroup>
+  <Target Name="ValidateLegacyCoreBuild" BeforeTargets="ResolveReferences" Condition="'$(ReportDeskLegacyCoreDirectory)' != ''">
+    <Error Condition="'$(TargetFramework)' != 'net462'" Text="The legacy Core hotfix build requires net462." />
+    <GetFileHash Files="$(ReportDeskLegacyCoreDirectory)/ReportDesk.Core.dll" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="LegacyCoreHash" />
+    </GetFileHash>
+    <Error Condition="'%(LegacyCoreHash.FileHash)' != '6249D398ECC6B39F258AA2BF439BF4ED249576C43170ECE15015953234C7BDA7'" Text="Legacy Core baseline mismatch. Stop; use the verified baseline." />
+  </Target>
 </Project>

@@ -5,14 +5,17 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
+using ReportDesk.Core;
 using ReportDesk.Web.Sync;
 
 internal static class Program
 {
     private static int passed;
-    private static byte[] query, otherQuery, layout;
+    private static byte[] query, otherQuery, layout, legacyLayout;
     private const string QueryPath = "Config/Xml/1041查询设置.xml";
     private const string LayoutPath = "Config/Xml/1041报表设置.xml";
     private static string testRoot;
@@ -21,21 +24,31 @@ internal static class Program
         try
         {
             if (args.Length > 0 && args[0] == "crash") return Crash(args[1]);
+            if (args.Length > 0 && args[0] == "crash-unchanged") return Crash(args[1], false);
             if (args.Length > 0 && args[0] == "lock") return CheckChildLock(args[1]);
             string lib = args.Length == 0 ? @"D:\系统知识库\00_Inbox\yljhis\LIB\LIB" : args[0];
             // Byte sources are actual existing HIS report definitions, read only. No Oracle rows or query results are fabricated.
             string[] sources = { Path.Combine(lib, QueryPath.Replace('/', '\\')), Path.Combine(lib, LayoutPath.Replace('/', '\\')),
-                Path.Combine(lib, @"Xml\供应室按科室汇总回收数量查询报表查询设置.xml") };
+                Path.Combine(lib, @"Xml\供应室按科室汇总回收数量查询报表查询设置.xml"),
+                Path.Combine(lib, @"Config\Xml\Expense\In\住院按金月报表报表设置.xml") };
             string[] hashes = sources.Select(ReportWorkDirectory.HashFile).ToArray();
             query = File.ReadAllBytes(sources[0]); layout = File.ReadAllBytes(sources[1]); otherQuery = File.ReadAllBytes(sources[2]);
+            legacyLayout = File.ReadAllBytes(sources[3]);
             testRoot = Path.Combine(Path.GetTempPath(), "ReportDeskSyncChecks-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(testRoot);
+            ErrorLog.Initialize(Path.Combine(testRoot, "Logs"));
             Run("ZIP named and legacy empty entry preserve real LIB bytes", ArchiveRoundtrip);
             Run("ZIP traversal, CRC, truncation, multi-entry and expansion guards", ArchiveGuards);
             Run("path traversal, ADS, device names and root boundaries", Paths);
             Run("disabled and unvalidated reader never request a connection", Disabled);
             Run("same-directory lease excludes another process", CrossProcessLock);
             Run("protected edit rolls back both files and reload failure", Rollback);
+            Run("denied SQL replacement leaves original usable without recovery marker", DeniedSqlSave);
+            Run("NTFS write-denied SQL save preserves original and clears recovery marker", AccessDeniedSqlSave);
+            Run("startup clears an unchanged read-only pending edit", UnchangedCrashRecovery);
+            Run("mixed rollback restores changed files without rewriting unchanged read-only files", MixedCrashRecovery);
+            Run("unchanged files do not bypass backup integrity checks", UnchangedBackupIntegrity);
+            Run("failed changed-file recovery retains marker and redacted diagnostics", ChangedRecoveryFailure);
             Run("process exit mid-batch is recovered before reuse", CrashRecovery);
             Run("transaction keeps marker if recovery reload fails", RecoveryFailure);
             Run("real-byte publication replay is idempotent and late commits are rechecked", Replay);
@@ -44,6 +57,7 @@ internal static class Program
             Run("historical multi-report batch retains independent latest group", MultiReportLatest);
             Run("scan memory bound counts current candidates rather than publication history", CandidateMemoryBound);
             Run("empty startup followed by import registers new baseline without resetting tracked edits", ImportAfterEmptyStartup);
+            Run("legacy LIB layout baseline preserves bytes while incoming invalid XML stays blocked", LegacyLayoutBaseline);
             Run("local conflicts, stale decisions, accept HIS and keep local", Conflicts);
             Run("incomplete pairs, unallowlisted XML and duplicate targets stay pending", PolicyGuards);
             Run("failed publication is retried after restart", Retry);
@@ -173,11 +187,140 @@ internal static class Program
             Check(calls == 2 && !tx.RequiresRecovery, "rollback reload");
         }
     }
-    private static int Crash(string root)
+    private static void ReadOnly(string path, Action action)
+    {
+        var attributes = File.GetAttributes(path);
+        File.SetAttributes(path, attributes | FileAttributes.ReadOnly);
+        try { action(); }
+        finally { File.SetAttributes(path, attributes); }
+    }
+    private static void DeniedSqlSave()
+    {
+        using (var f = Fixture.New())
+        {
+            var path = f.Work.Resolve(QueryPath);
+            var snapshot = SqlXmlEditor.Read(path);
+            var source = snapshot.Sources.First(s => s.Editable);
+            var tx = new ReportFileTransaction(f.Work);
+            int reloads = 0;
+            ReadOnly(path, () => {
+                Reject(() => tx.ExecuteProtectedEdit(new[] { QueryPath },
+                    () => SqlXmlEditor.Save(snapshot, source.Index, source.Sql + "\n-- isolated save regression"),
+                    () => reloads++), "TransactionRolledBack");
+                Check(!tx.RequiresRecovery && reloads == 1, "denied save did not poison startup");
+                Check(File.ReadAllBytes(path).SequenceEqual(query), "denied save preserved original bytes");
+                Check((File.GetAttributes(path) & FileAttributes.ReadOnly) != 0, "recovery did not change attributes");
+            });
+            tx.RecoverFiles();
+            Check(!tx.RequiresRecovery && SqlXmlEditor.Read(path).Hash == snapshot.Hash, "original remains readable after restart");
+        }
+    }
+    private static void AccessDeniedSqlSave()
+    {
+        using (var f = Fixture.New())
+        {
+            // Restrict only this isolated copy, and restore its original DACL in finally.
+            var path = f.Work.Resolve(QueryPath);
+            var directory = Path.GetDirectoryName(path);
+            var originalAcl = File.GetAccessControl(path, AccessControlSections.Access);
+            var deniedAcl = File.GetAccessControl(path, AccessControlSections.Access);
+            var originalDirectoryAcl = Directory.GetAccessControl(directory, AccessControlSections.Access);
+            var deniedDirectoryAcl = Directory.GetAccessControl(directory, AccessControlSections.Access);
+            // A parent grant of DeleteChild otherwise permits replacement despite a file Delete deny.
+            deniedDirectoryAcl.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User,
+                FileSystemRights.DeleteSubdirectoriesAndFiles, AccessControlType.Deny));
+            deniedAcl.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User,
+                FileSystemRights.WriteData | FileSystemRights.Delete, AccessControlType.Deny));
+            var snapshot = SqlXmlEditor.Read(path);
+            var source = snapshot.Sources.First(s => s.Editable);
+            var tx = new ReportFileTransaction(f.Work);
+            Exception denied = null;
+            int reloads = 0;
+            try
+            {
+                File.SetAccessControl(path, deniedAcl);
+                Directory.SetAccessControl(directory, deniedDirectoryAcl);
+                Reject(() => tx.ExecuteProtectedEdit(new[] { QueryPath }, () => {
+                    try { SqlXmlEditor.Save(snapshot, source.Index, source.Sql + "\n-- isolated NTFS regression"); }
+                    catch (Exception ex) { denied = ex; throw; }
+                }, () => reloads++), "TransactionRolledBack");
+                Check(denied != null && (denied.HResult & 0xffff) == 5, "actual NTFS access denied during save");
+                Check(!tx.RequiresRecovery && reloads == 1, "NTFS save rejection did not poison startup");
+                Check(File.ReadAllBytes(path).SequenceEqual(query), "NTFS rejection preserved original bytes");
+                tx.RecoverFiles();
+                Check(!tx.RequiresRecovery, "NTFS rejection remains safe on restart");
+            }
+            finally
+            {
+                Directory.SetAccessControl(directory, originalDirectoryAcl);
+                File.SetAccessControl(path, originalAcl);
+            }
+        }
+    }
+    private static void UnchangedCrashRecovery()
+    {
+        using (var f = Fixture.New())
+        {
+            var path = f.Work.Resolve(QueryPath);
+            ReadOnly(path, () => {
+                Check(Child("crash-unchanged", f.Root) == 27, "exit before mutation");
+                var tx = new ReportFileTransaction(f.Work);
+                Check(tx.RequiresRecovery, "unchanged crash left journal");
+                tx.RecoverFiles();
+                Check(!tx.RequiresRecovery && File.ReadAllBytes(path).SequenceEqual(query), "unchanged journal cleared without rewriting");
+            });
+        }
+    }
+    private static void MixedCrashRecovery()
+    {
+        using (var f = Fixture.New())
+        {
+            Check(Child("crash", f.Root) == 27, "mixed batch interrupted");
+            ReadOnly(f.Work.Resolve(LayoutPath), () => {
+                var tx = new ReportFileTransaction(f.Work);
+                tx.RecoverFiles();
+                Check(!tx.RequiresRecovery, "mixed batch recovered");
+                Check(File.ReadAllBytes(f.Work.Resolve(QueryPath)).SequenceEqual(query), "changed query restored");
+                Check(File.ReadAllBytes(f.Work.Resolve(LayoutPath)).SequenceEqual(layout), "unchanged layout preserved");
+            });
+        }
+    }
+    private static void UnchangedBackupIntegrity()
+    {
+        using (var f = Fixture.New())
+        {
+            Check(Child("crash-unchanged", f.Root) == 27, "unchanged backup fixture");
+            var journal = XmlDisk.Load<FileTransactionJournal>(Path.Combine(f.Work.StateRoot, "pending.xml"));
+            File.WriteAllBytes(Path.Combine(f.Work.StateRoot, journal.Id, "0.bin"), otherQuery);
+            var tx = new ReportFileTransaction(f.Work);
+            Reject(() => tx.RecoverFiles(), "RecoveryRequired");
+            Check(tx.RequiresRecovery && File.ReadAllBytes(f.Work.Resolve(QueryPath)).SequenceEqual(query), "bad backup stays blocked even if target is unchanged");
+        }
+    }
+    private static void ChangedRecoveryFailure()
+    {
+        using (var f = Fixture.New())
+        {
+            Check(Child("crash", f.Root) == 27, "changed recovery fixture");
+            var tx = new ReportFileTransaction(f.Work);
+            var path = f.Work.Resolve(QueryPath);
+            ReadOnly(path, () => {
+                Reject(() => tx.RecoverFiles(), "RecoveryRequired");
+                Check(tx.RequiresRecovery, "changed inaccessible file retained recovery marker");
+                Check(File.ReadAllBytes(path).SequenceEqual(layout), "failed recovery did not claim rollback");
+            });
+            tx.RecoverFiles();
+            Check(!tx.RequiresRecovery && File.ReadAllBytes(path).SequenceEqual(query), "recovery succeeds once file becomes writable");
+            var log = string.Join("\n", Directory.GetFiles(ErrorLog.DirectoryPath, "ReportDesk-*.log").Select(File.ReadAllText));
+            Check(log.Contains("operation=ReportTransactionRecovery") && log.Contains("hresult="), "recovery keeps diagnostic code and stack");
+            Check(!log.Contains(f.Work.Root) && !log.Contains("<ReportQueryInfo") && !log.Contains("SELECT "), "recovery logs no paths or report contents");
+        }
+    }
+    private static int Crash(string root, bool mutate = true)
     {
         var work = new ReportWorkDirectory(Path.Combine(root, "Reports"), Path.Combine(root, "Sync"));
         new ReportFileTransaction(work).ExecuteProtectedEdit(new[] { QueryPath, LayoutPath }, () =>
-        { File.WriteAllBytes(work.Resolve(QueryPath), File.ReadAllBytes(work.Resolve(LayoutPath))); Environment.Exit(27); }, () => { });
+        { if (mutate) File.WriteAllBytes(work.Resolve(QueryPath), File.ReadAllBytes(work.Resolve(LayoutPath))); Environment.Exit(27); }, () => { });
         return 1;
     }
     private static void CrashRecovery()
@@ -269,6 +412,31 @@ internal static class Program
         File.WriteAllBytes(work.Resolve(QueryPath), query); c.RegisterImportedBaseline();
         source.Batches.Add(Batch(2, otherQuery));
         Check(c.RunOnce().ConflictReleases == 1, "import must not reset tracked local edits");
+    }
+    private static void LegacyLayoutBaseline()
+    {
+        string root = Path.Combine(testRoot, Guid.NewGuid().ToString("N"));
+        var options = new SyncOptions { WorkingDirectory = Path.Combine(root, "Reports"), StateDirectory = Path.Combine(root, "Sync"), Enabled = true };
+        Directory.CreateDirectory(Path.Combine(options.WorkingDirectory, "Config", "Xml"));
+        var work = new ReportWorkDirectory(options.WorkingDirectory, options.StateDirectory);
+        File.WriteAllBytes(work.Resolve(QueryPath), query); File.WriteAllBytes(work.Resolve(LayoutPath), legacyLayout);
+        var policy = ReportFilePolicy.FromBaseline(work);
+        Check(policy.Paths.Contains(LayoutPath), "legacy companion discovered from real XML root");
+        Reject(() => policy.ValidateFile(LayoutPath, legacyLayout), "ReportXmlInvalid");
+        var source = new OfflineArchiveSource(); var sink = new Sink();
+        var coordinator = new SyncCoordinator(options, source, policy, sink);
+        coordinator.InitializeBaseline();
+        var state = XmlDisk.Load<SyncDiskState>(Path.Combine(work.StateRoot, "sync-state.xml"));
+        Check(state.Files.Single(f => f.Path == LayoutPath).Hash == ReportWorkDirectory.Hash(legacyLayout), "legacy bytes hashed without rewriting");
+        Check(File.ReadAllBytes(work.Resolve(LayoutPath)).SequenceEqual(legacyLayout) && sink.Calls == 0, "baseline never rewrites or reloads layout");
+        var bad = Batch(1, query); bad.Files[1].Content = Zip(legacyLayout); source.Batches.Add(bad);
+        Check(coordinator.RunOnce().PendingReleases == 1 && sink.Calls == 0, "incoming invalid XML remains pending");
+        source.Batches.Clear(); source.Batches.Add(Batch(1, otherQuery));
+        Check(coordinator.RunOnce().AppliedReleases == 1, "valid complete replacement can supersede unchanged legacy baseline");
+        File.WriteAllBytes(work.Resolve(LayoutPath), legacyLayout);
+        coordinator.RegisterImportedBaseline(); coordinator.InitializeBaseline();
+        source.Batches.Add(Batch(2, query));
+        Check(coordinator.RunOnce().ConflictReleases == 1, "reinitialization must not reset tracked local edits");
     }
     private static void CandidateMemoryBound()
     {

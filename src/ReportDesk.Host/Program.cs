@@ -171,7 +171,20 @@ internal sealed partial class Service : IDisposable
             locations = locations.For(r), locationWarnings = locations.Warnings,
             guidance = r.Issues.Select(AdaptationGuidance.For).GroupBy(x => x.Code).Select(g => g.First()).ToArray(),
             sources = r.Queries.Select((q, i) => new { query=q, index=i }).Where(x=>x.query.Kind!="ConditionUsing").Select(x=>new { index=x.index, name=x.query.ToString() + (ReportReadiness.IssuesFor(r,x.query).Count>0?" · 待适配":""), issues=ReportReadiness.IssuesFor(r,x.query) }).ToArray(), source = index,
+#if REPORTDESK_LEGACY_CORE
+            // A targeted Web hotfix must retain the deployed Core/UI parameter contract.
+            // The pre-department-picker Core has no IsCurrentDepartment method.
             parameters = r.Parameters.Where(p => needed.Contains(p.Name, StringComparer.OrdinalIgnoreCase)).Select(p => new { name = p.Name, label = p.Label.Length > 0 ? p.Label : p.Name, kind = p.Kind, multiple = p.Multiple, treeSelect = p.TreeSelect, format = p.Format, implicitValue = p.Implicit, hasAll = p.HasAll, allValue = p.AllValue, allLabel = p.AllLabel ?? "全部", options = p.Options ?? new List<ParameterOption>(), lookup = ParameterOptions.LookupSql(p).Length > 0, initial = p.Kind == "DateTimeType" ? InitialDate(p) : ParameterOptions.Initial(p) }).ToArray() };
+#else
+            parameters = r.Parameters.Where(p => needed.Contains(p.Name, StringComparer.OrdinalIgnoreCase)).OrderBy(p => ParameterOptions.IsCurrentDepartment(p) ? 0 : 1).Select(p => new { name = p.Name, label = ParameterOptions.IsCurrentDepartment(p) ? "当前科室（" + p.Name + "）" : p.Label.Length > 0 ? p.Label : p.Name, kind = ParameterOptions.IsCurrentDepartment(p) ? "ComboBoxType" : p.Kind, multiple = p.Multiple, treeSelect = p.TreeSelect, format = p.Format, implicitValue = p.Implicit, contextDepartment = ParameterOptions.IsCurrentDepartment(p), hasAll = p.HasAll, allValue = p.AllValue, allLabel = p.AllLabel ?? "全部", options = p.Options ?? new List<ParameterOption>(), lookup = ParameterOptions.LookupSql(p).Length > 0, lookupDependencies = LookupDependencies(r, p), initial = p.Kind == "DateTimeType" ? InitialDate(p) : ParameterOptions.Initial(p) }).ToArray() };
+#endif
+    }
+    private static string[] LookupDependencies(ReportDefinition report, ParameterDefinition parameter)
+    {
+        if (ParameterOptions.IsDictionary(parameter)) return Array.Empty<string>();
+        var sqls = parameter.LookupSourceName.Length > 0 ? report.Queries.Where(q => q.Kind == "ConditionUsing").Select(q => q.Sql) : new[] { parameter.LookupSql };
+        return sqls.Where(sql => sql.Length > 0).SelectMany(sql => SqlTemplate.Compile(sql).RequiredNames)
+            .Select(ReportImporter.ParameterName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
     private static string InitialDate(ParameterDefinition p)
     {
@@ -191,7 +204,7 @@ internal sealed partial class Service : IDisposable
         foreach (var name in SqlTemplate.Compile(sql).RequiredNames)
         {
             var p = r.Parameters.FirstOrDefault(x => x.Name.Equals(ReportImporter.ParameterName(name), StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidOperationException("缺少参数定义。");
-            if (!raw.ContainsKey(p.Name) || raw[p.Name] == null) throw new InvalidOperationException("请填写或选择所有查询条件。");
+            if (!raw.ContainsKey(p.Name) || raw[p.Name] == null) throw new InvalidOperationException("请填写或选择所有查询条件。\n缺少：" + p.Label + "（" + p.Name + "）");
             if(p.Multiple && !name.EndsWith(".Text",StringComparison.Ordinal))
             {
                 if(raw[p.Name] is string || !(raw[p.Name] is System.Collections.IEnumerable entries)) throw new InvalidOperationException("请加载并选择多选条件："+p.Label);
@@ -205,7 +218,7 @@ internal sealed partial class Service : IDisposable
                 values[name]=Text(raw,p.Name+".Text"); continue;
             }
             var text = Text(raw, p.Name);
-            if (p.Implicit && string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException("请填写已确认的上下文编码。");
+            if (p.Implicit && string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException("请填写已确认的上下文编码。\n缺少：" + p.Label + "（" + p.Name + "）");
             if (p.Kind == "DateTimeType")
             {
                 if (!DateTime.TryParseExact(text, new[] { "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-ddTHH:mm", "yyyy-MM-dd" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)) throw new InvalidOperationException("日期格式无效。");
